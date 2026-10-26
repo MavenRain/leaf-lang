@@ -1,0 +1,3 @@
+-- The faces of glue must join to the face of the Glue type (GLUE_COVER).
+bad : (j : I) → (k : I) → Glue ℕ [ j ↦ pack ℕ (idEquiv ℕ) , k ↦ pack ℕ (idEquiv ℕ) ]
+bad j k = glue [ j ↦ 5 ] 5

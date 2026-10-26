@@ -1,0 +1,2 @@
+bad : (q : Path (Type 0) ℕ ℕ) → ℕ → ℕ
+bad q n = transp (λ i → q i) i1 n

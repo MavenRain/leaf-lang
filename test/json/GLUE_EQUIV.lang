@@ -1,0 +1,2 @@
+bad : (j : I) → Type 0
+bad j = Glue ℕ [ j ↦ pack ℕ 3 ]

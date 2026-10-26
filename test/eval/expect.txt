@@ -22,9 +22,49 @@ inventory boltRed => 1
 inventory nutRed => 0
 inventory lot => makeLot 3 250
 inventory lotCost => 250
-sigma offer => pack 1200 refl
-equality moved => fun P => fun u => u
+sigma offer => pack 1200 (fun i => 1200)
+equality moved => fun P => fun u => transp (fun i => P 1200) i0 u
+equality atStart => 1200
+equality bumpLine => fun i => 1201
 universes Endo => (A : Type 0) -> (x : A) -> A
-monad okBind => inl false
+monad okBind => inl Bool Nat false
 functions four => 4
 functions applied => 36
+test/eval/path q => 0
+test/eval/path u => 1
+test/eval/path p => fun i => 0
+test/eval/path r => fun i => fun _x0 => 0
+test/eval/path etaP => fun i => fun _x0 => 0
+test/eval/path flip => fun i => 2
+test/eval/path flipE => fun e => fun i => e (~ i)
+test/eval/path conn => fun e => fun j => fun i => e (j ∧ i)
+test/eval/path connOr => fun e => fun j => fun i => e (j ∨ i)
+test/eval/path sys => fun i => [ i ↦ 1 , ~ i ↦ 1 ]
+test/eval/path sysNil => fun i => []
+test/eval/path tc 5 => 5
+test/eval/path tOne 7 => 7
+test/eval/path tPi 3 => 3
+test/eval/path hOne => fun e => 0
+test/eval/path hNat => fun i => 3
+test/eval/path hSig => fun i => pack 1 2
+test/eval/path tPath => fun j => 2
+test/eval/glue ungAt1 => 7
+test/eval/glue ungAt0 => 7
+test/eval/glue ung => fun j => 7
+test/eval/glue uaAt0 => 4
+test/eval/glue uaAt1 => 5
+test/eval/glue uaId3 => 3
+test/eval/glue swapped => pack true 3
+test/eval/glue uaSwapped => pack true 3
+test/eval/glue hcompGlueUng => fun j => 7
+test/eval/glue transpGl => fun j => 7
+test/eval/fin atOne => 10
+test/eval/fin atLast => 20
+test/eval/fin below => 1
+test/eval/fin notBelow => 0
+test/eval/face-refl faceRefl => fun i => fun p => [ ~ i ↦ fun _x0 => 0 ]
+test/eval/face-lambda faceLambda => fun i => fun p => [ ~ i ↦ fun j => p i ]
+test/eval/glue-pair gluePairFirst0 => 7
+test/eval/glue-pair gluePairFirst1 => 7
+test/eval/glue-pair gluePairLast0 => 1
+test/eval/glue-pair gluePairLast1 => 1

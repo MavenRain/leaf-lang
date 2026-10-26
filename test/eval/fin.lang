@@ -1,0 +1,22 @@
+-- Port tests for Fin n (S2 U7), the domain Σ of PLAN 2.2. A vector
+-- Fin 3 → ℕ is read at a Fin element; witness gives the number.
+one : Fin 3
+one = pack 1 refl
+
+last : Fin 3
+last = pack 2 refl
+
+vec : Fin 3 → ℕ
+vec i = natMul (witness i) 10
+
+atOne : ℕ
+atOne = vec one
+
+atLast : ℕ
+atLast = vec last
+
+below : Bool
+below = lt 2 3
+
+notBelow : Bool
+notBelow = lt 3 3

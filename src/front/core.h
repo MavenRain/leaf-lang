@@ -21,57 +21,57 @@ typedef enum {
   OP_NAT,
   OP_BOOL,
   OP_UNIT,
-  OP_PROD,
-  OP_SUM,
   OP_OPTION,
-  OP_LIST,
-  OP_EQ,
   OP_FAMILY,
   OP_UNIT_VAL,
   OP_TRUE,
   OP_FALSE,
-  OP_PAIR,
-  OP_INL,
-  OP_INR,
   OP_NONE,
   OP_SOME,
-  OP_NIL,
-  OP_CONS,
   OP_PACK,
-  OP_REFL,
   OP_CTOR,
-  OP_FIRST,
-  OP_SECOND,
-  OP_EITHER,
   OP_OPTION_ELIM,
   OP_PURE,
   OP_MAP,
   OP_BIND,
   OP_FOLD_NAT,
-  OP_FOLD_LIST,
   OP_FOLD_FAMILY,
-  OP_UNFOLD,
-  OP_FILTER,
   OP_WITNESS,
   OP_PAYLOAD,
-  OP_SYMM,
-  OP_TRANS,
-  OP_TRANSPORT,
-  OP_CONG,
   OP_NAT_ADD,
   OP_NAT_SUB,
   OP_NAT_MUL,
   OP_NAT_EQ,
   OP_NAT_LE,
   OP_FLAG_IF,
-  OP_PROJ
+  OP_PROJ,
+  OP_SSET,  /* the sort of pretypes; no surface name */
+  OP_I,     /* the interval */
+  OP_I0,
+  OP_I1,
+  OP_PATHP, /* PathP A a b */
+  OP_PLAM,  /* a path lambda: the argument is a function over I */
+  OP_PAPP,  /* p r, then the ends a0 and a1 of the type of p */
+  OP_INEG,  /* ~ r */
+  OP_IMIN,  /* r ∧ s */
+  OP_IMAX,  /* r ∨ s */
+  OP_PARTIAL,    /* Partial φ A: a pretype */
+  OP_SYSTEM,     /* [ φ ↦ u , ... ]: a face, a branch and the other cells */
+  OP_SYSNIL,     /* [] */
+  OP_FROMPARTIAL, /* fromPartial p, when the face of the type of p holds */
+  OP_TRANSP,     /* transp A r u: [line, r, u] */
+  OP_TPART,      /* internal: a part of a type, field = the part */
+  OP_TCOD,       /* internal: the codomain of a Pi or Sigma at x: [T, x] */
+  OP_HCOMP,      /* hcomp A φ side u0: [A, φ, side, u0] */
+  OP_SYSMAP,     /* internal: f on each branch of a system: [f, sys] */
+  OP_GLUE,       /* Glue A [ φ ↦ pack T e , ... ]: [A, φ, sys] */
+  OP_GLUE_ELEM,  /* glue [ φ ↦ t , ... ] a at G = Glue A [ ... ]: [G, sys, a] */
+  OP_UNGLUE      /* unglue g at Glue A [ φ ↦ pack T e , ... ]: [A, φ, sys, g] */
 } Op;
 
-/* The instance of pure, map, bind and filter (formers F5 and F8). */
+/* The instance of pure, map and bind (former F5). */
 typedef enum {
-  CARRIER_OPTION,
-  CARRIER_LIST,
-  CARRIER_SUM
+  CARRIER_OPTION
 } Carrier;
 
 typedef enum {
@@ -94,7 +94,7 @@ struct Core {
   uint64_t nat;
   Op op;
   /* OP_FAMILY, OP_FOLD_FAMILY: the family. OP_CTOR, OP_PROJ: the
-     constructor. OP_PURE, OP_MAP, OP_BIND, OP_FILTER: the Carrier. */
+     constructor. OP_PURE, OP_MAP, OP_BIND: the Carrier. */
   uint32_t inst;
   uint32_t field; /* OP_PROJ: the field number */
   const char *name;
@@ -189,6 +189,7 @@ typedef struct {
   uint32_t ctor_count;
   uint32_t ctor_cap;
   unsigned depth;
+  uint32_t fresh_level; /* above every variable level allocated by this machine */
   uint64_t fuel;
   int overflowed;
   size_t checked;  /* check_program: the declarations before the current one */
@@ -214,6 +215,26 @@ const Value *apply_value(Machine *m, const Value *fn, const Value *arg);
 const Value *closure_apply(Machine *m, const Value *binder, const Value *arg);
 /* 1 when A and B have the same normal form. LEVEL is the next free level. */
 int conv_values(Machine *m, uint32_t level, const Value *a, const Value *b);
+/* Faces are interval terms. face_holds: 1 when PHI holds (a meet with no
+   literal). face_equal: 1 when A and B have the same face normal form. */
+int face_holds(Machine *m, uint32_t level, const Value *phi);
+int face_equal(Machine *m, uint32_t level, const Value *a, const Value *b);
+/* The meets of the face normal form of PHI, with the variable literals
+   only (an atom drops out). Literal 2k is (k = i1) and 2k + 1 is
+   (k = i0). 0 when PHI is not a face in the bounds. */
+#define FACE_MEETS_MAX 16u
+#define FACE_LITS_MAX 8u
+typedef struct {
+  uint32_t lit[FACE_MEETS_MAX][FACE_LITS_MAX];
+  uint32_t len[FACE_MEETS_MAX];
+  uint32_t count;
+} FaceMeets;
+int face_meets(Machine *m, uint32_t level, const Value *phi, FaceMeets *out);
+/* Conversion after the restriction to each meet of PHI. An atom stays
+   free, so the test is conservative there. */
+int conv_under_face(Machine *m, uint32_t level, const Value *phi, const Value *a, const Value *b);
+/* V at the variable ends that are common to every meet of PHI. */
+const Value *value_under_face(Machine *m, uint32_t level, const Value *phi, const Value *v);
 const Core *quote_value(Machine *m, uint32_t level, const Value *v);
 /* Writes V in the surface syntax. NAMES gives the names of the levels below
    NAME_COUNT. Returns 1 for a complete rendering, 0 on truncation or error. */

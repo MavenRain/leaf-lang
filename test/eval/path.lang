@@ -1,0 +1,102 @@
+-- Port tests for paths (S2 U3b2). Path application reduces at the two
+-- ends, the printer shows a path lambda, and the conversion accepts refl
+-- against a constant path and a path lambda against a neutral path.
+p : Path ℕ 0 0
+p i = 0
+
+q : ℕ
+q = p i1
+
+t : PathP (λ (i : I) → ℕ) 1 1
+t i = 1
+
+u : ℕ
+u = t i0
+
+r : Path (Path ℕ 0 0) refl p
+r = refl
+
+eta : (e : Path ℕ 0 0) → Path (Path ℕ 0 0) (λ i → e i) e
+eta e = refl
+
+etaBack : (e : Path ℕ 0 0) → Path (Path ℕ 0 0) e (λ i → e i)
+etaBack e = refl
+
+etaP : Path (Path ℕ 0 0) (λ i → p i) p
+etaP = eta p
+
+-- The interval connectives (S2 U4a). `~ r` reverses a path, `r ∧ s` and
+-- `r ∨ s` give the connections, and `~ (~ i)`, `i ∧ i0` and `i ∨ i1`
+-- reduce by conversion.
+a : ℕ
+a = 2
+
+b : ℕ
+b = a
+
+line : Path ℕ a b
+line i = a
+
+flip : Path ℕ b a
+flip i = line (~ i)
+
+flipE : (e : Path ℕ 0 0) → Path ℕ 0 0
+flipE e i = e (~ i)
+
+negNeg : (e : Path ℕ 0 0) → Path (Path ℕ 0 0) (λ i → e (~ (~ i))) e
+negNeg e = refl
+
+meetZero : (e : Path ℕ 0 0) → Path (Path ℕ 0 0) (λ i → e (i ∧ i0)) (λ i → 0)
+meetZero e = refl
+
+joinOne : (e : Path ℕ 0 0) → Path (Path ℕ 0 0) (λ i → e (i ∨ i1)) (λ i → 0)
+joinOne e = refl
+
+conn : (e : Path ℕ 0 0) → PathP (λ (j : I) → Path ℕ 0 (e j)) (λ i → 0) e
+conn e j i = e (i ∧ j)
+
+connOr : (e : Path ℕ 0 0) → PathP (λ (j : I) → Path ℕ (e j) 0) e (λ i → 0)
+connOr e j i = e (i ∨ j)
+
+sys : (i : I) → Partial (i ∨ ~ i) ℕ
+sys i = [ i ↦ 1 , ~ i ↦ 1 ]
+
+sysNil : (i : I) → Partial i0 ℕ
+sysNil i = []
+
+-- transp (S2 U4c). Over a constant line transp is the identity; where r
+-- holds the result is u; over a Pi line the template moves the function
+-- (the domain back, the codomain forward), then ℕ is regular. tLine moves
+-- along a line that is not constant (r = i0 has no meet), and sysT checks
+-- a transp in a system cell, where the line is constant under the face ~ i.
+tc : ℕ → ℕ
+tc n = transp (λ i → ℕ) i0 n
+
+tOne : ℕ → ℕ
+tOne n = transp (λ i → ℕ) i1 n
+
+tPi : ℕ → ℕ
+tPi = transp (λ i → ℕ → ℕ) i0 (λ n → n)
+
+tLine : (e : Path (Type 0) ℕ ℕ) → ℕ → ℕ
+tLine e n = transp (λ i → e i) i0 n
+
+sysT : (e : Path (Type 0) ℕ ℕ) → (i : I) → Partial (~ i) ℕ
+sysT e i = [ ~ i ↦ transp (λ j → e (i ∧ j)) i1 0 ]
+
+-- hcomp (S2 U4d). Where a face holds, hcomp is the side at i1 (hOne).
+-- Where no face holds, hcomp over ℕ with a side that is constant and equal
+-- to the base is the base (hNat). Over a Sigma type hcomp acts on each
+-- component (hSig). tPath moves a path along a line of path types (the
+-- PathP template of transp).
+hOne : (e : Path ℕ 0 0) → ℕ
+hOne e = hcomp (λ j → [ i1 ↦ e j ]) 0
+
+hNat : (i : I) → ℕ
+hNat i = hcomp (λ j → [ i ↦ 3 ]) 3
+
+hSig : (i : I) → (x : ℕ) × ℕ
+hSig i = hcomp (λ j → [ i ↦ pack 1 2 ]) (pack 1 2)
+
+tPath : Path ℕ b b
+tPath = transp (λ i → Path ℕ (line i) (line i)) i0 (λ i → a)

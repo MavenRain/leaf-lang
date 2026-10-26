@@ -46,9 +46,10 @@ if ! rg -q -F 'the left side normalizes to 1201, the right side normalizes to 12
   fail=$((fail + 1))
 fi
 
-# Each line of test/eval/expect.txt is `FILE NAME [ARGS] => OUTPUT`. `langc eval`
-# must exit 0 and print OUTPUT. A trap also prints `langc: EVAL_OVERFLOW: NAME: ...`
-# on stderr.
+# Each line of test/eval/expect.txt is `FILE NAME [ARGS] => OUTPUT`. FILE is a
+# name in examples/, or a path with a `/` and no `.lang` (test/eval/path).
+# `langc eval` must exit 0 and print OUTPUT. A trap also prints
+# `langc: EVAL_OVERFLOW: NAME: ...` on stderr.
 evals=0
 while IFS= read -r line; do
   want=${line#* => }
@@ -57,7 +58,11 @@ while IFS= read -r line; do
   name=$2
   shift 2
   status=0
-  got=$(build/langc eval "examples/$file.lang" "$name" "$@" 2>"$tmp/err") || status=$?
+  case "$file" in
+    */*) src="$file.lang" ;;
+    *) src="examples/$file.lang" ;;
+  esac
+  got=$(build/langc eval "$src" "$name" "$@" 2>"$tmp/err") || status=$?
   first=$(head -n 1 "$tmp/err")
   want_err=""
   [ "$want" = "trap" ] && want_err="langc: EVAL_OVERFLOW: $name: "
@@ -106,15 +111,20 @@ for f in examples/*.lang; do
   [ "$status" -eq 0 ] && [ "$funcs" -eq "$entries" ] || { echo "FAIL ir $f: exit $status, $funcs funcs for $entries entries: $(head -n 1 "$tmp/ir.err")"; fail=$((fail + 1)); }
 done
 echo "ir: $irs lowered"
-status=0
-build/langc check test/ir/closure.lang > /dev/null || status=$?
-[ "$status" -eq 0 ] || { echo "FAIL closure.lang: check exit $status"; fail=$((fail + 1)); }
-status=0
-first=$(build/langc ir test/ir/closure.lang 2>&1 > /dev/null) || status=$?
-case "$status:$first" in
-  "1:langc: REFUSE_RUNTIME_CLOSURE: "*) ;;
-  *) echo "FAIL closure.lang: want exit 1 and REFUSE_RUNTIME_CLOSURE, got exit $status: $first"; fail=$((fail + 1)) ;;
-esac
+# ir_refused NAME CODE: `langc check test/ir/NAME.lang` accepts it, and
+# `langc ir` must exit 1 and print `langc: CODE: ...` on stderr.
+ir_refused() {
+  status=0
+  build/langc check "test/ir/$1.lang" > /dev/null || status=$?
+  [ "$status" -eq 0 ] || { echo "FAIL $1.lang: check exit $status"; fail=$((fail + 1)); }
+  status=0
+  first=$(build/langc ir "test/ir/$1.lang" 2>&1 > /dev/null) || status=$?
+  case "$status:$first" in
+    "1:langc: $2: "*) ;;
+    *) echo "FAIL $1.lang: want exit 1 and $2, got exit $status: $first"; fail=$((fail + 1)) ;;
+  esac
+}
+ir_refused closure REFUSE_RUNTIME_CLOSURE
 got=$(build/langc eval test/ir/lazy.lang lazy 3 2>&1) || true
 [ "$got" = "3" ] || { echo "FAIL lazy.lang: want 3, got $got"; fail=$((fail + 1)); }
 build/langc ir test/ir/lazy.lang > /dev/null || { echo "FAIL lazy.lang: ir"; fail=$((fail + 1)); }
@@ -129,15 +139,8 @@ for want in "stackSum 3:15" "stackTrap 0:7" "stackTrap 2:5" "stackDemand 0:trap"
   esac
 done
 build/langc ir test/ir/spine.lang > /dev/null || { echo "FAIL spine.lang: ir"; fail=$((fail + 1)); }
-status=0
-build/langc check test/ir/tree.lang > /dev/null || status=$?
-[ "$status" -eq 0 ] || { echo "FAIL tree.lang: check exit $status"; fail=$((fail + 1)); }
-status=0
-first=$(build/langc ir test/ir/tree.lang 2>&1 > /dev/null) || status=$?
-case "$status:$first" in
-  "1:langc: REFUSE_RUNTIME_TREE: "*) ;;
-  *) echo "FAIL tree.lang: want exit 1 and REFUSE_RUNTIME_TREE, got exit $status: $first"; fail=$((fail + 1)) ;;
-esac
+ir_refused tree REFUSE_RUNTIME_TREE
+ir_refused path REFUSE_RUNTIME_PATH
 
 # The Wasm target: each module builds and is valid. Then the differential: on
 # the grid of test/grid.awk, node and `langc eval` give the same result for
@@ -189,7 +192,7 @@ same_dump() {
     cmp -s "$tmp/d1.txt" "$tmp/d2.txt"
 }
 canon=0
-for f in domain/domain.lang examples/*.lang test/check/*.lang test/ir/*.lang test/json/*.lang test/fmt/*.canon; do
+for f in domain/domain.lang examples/*.lang test/check/*.lang test/eval/*.lang test/ir/*.lang test/json/*.lang test/fmt/*.canon; do
   case "$f" in
     test/json/LEX_*.lang | test/json/PARSE_*.lang | test/json/W_NONCANON.lang) continue ;;
   esac
@@ -255,7 +258,7 @@ done
 # docs/DIAGNOSTICS.md has one row for each code in src/. Each code has
 # test/json/CODE.lang (its first JSON line has that code), or its row gives
 # "no fixture:" and a reason; not the two.
-rg -o -I -N -r '$1$2$3' '"((?:LEX|PARSE|REFUSE|TYPE|NAME|EVAL|W)_[A-Z_]+)"|"(OOM|IO|IO_SIZE|USAGE|INTERNAL)"|langc: ((?:EVAL|REFUSE|TYPE)_[A-Z_]+):' src |
+rg -o -I -N -r '$1$2$3' '"((?:LEX|PARSE|REFUSE|TYPE|NAME|EVAL|GLUE|UNGLUE|W)_[A-Z_]+)"|"(OOM|IO|IO_SIZE|USAGE|INTERNAL)"|langc: ((?:EVAL|REFUSE|TYPE)_[A-Z_]+):' src |
   LC_ALL=C sort -u >"$tmp/src-codes.txt"
 rg -o -N -r '$1' '^\| `([A-Z_]+)` \|' docs/DIAGNOSTICS.md | LC_ALL=C sort -u >"$tmp/doc-codes.txt"
 if ! cmp -s "$tmp/src-codes.txt" "$tmp/doc-codes.txt"; then

@@ -1,0 +1,3 @@
+codata Stream (A : Type 0) : Type where
+  head : Stream A → A
+  tail : Stream A → Stream A

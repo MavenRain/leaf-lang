@@ -18,10 +18,10 @@ count : (n : ℕ) → ℕ
 count n = n
 
 choice : Sum ℕ ℕ
-choice = inr 5
+choice = inr ℕ ℕ 5
 
 picked : ℕ
-picked = either size count choice
+picked = fold size count choice
 
 nothing : Option ℕ
 nothing = none

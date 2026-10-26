@@ -1,0 +1,2 @@
+bad : (i : I) → (p : Path ℕ 0 1) → Partial i (Path ℕ (p i) 0)
+bad i p = [ i ↦ refl ]

@@ -1,0 +1,20 @@
+gluePair : (i : I) → Glue ((x : ℕ) × Bool) [ i ↦ pack ((x : ℕ) × Bool) (idEquiv ((x : ℕ) × Bool)) ]
+gluePair i = glue [ i ↦ pack 7 true ] (pack 7 true)
+
+gluePairFirst : (i : I) → ℕ
+gluePairFirst i = witness (unglue (gluePair i))
+
+gluePairLast : (i : I) → Bool
+gluePairLast i = payload (unglue (gluePair i))
+
+gluePairFirst0 : ℕ
+gluePairFirst0 = gluePairFirst i0
+
+gluePairFirst1 : ℕ
+gluePairFirst1 = gluePairFirst i1
+
+gluePairLast0 : Bool
+gluePairLast0 = gluePairLast i0
+
+gluePairLast1 : Bool
+gluePairLast1 = gluePairLast i1

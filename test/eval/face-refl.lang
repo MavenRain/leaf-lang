@@ -1,0 +1,2 @@
+faceRefl : (i : I) → (p : Path ℕ 0 0) → Partial (~ i) (Path ℕ (p i) 0)
+faceRefl i p = [ ~ i ↦ refl ]

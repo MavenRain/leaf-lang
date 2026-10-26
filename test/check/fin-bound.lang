@@ -1,0 +1,4 @@
+-- 3 is not below 3, so pack 3 refl is not a Fin 3 (S2 U7): lt 3 3
+-- normalizes to false and refl cannot prove false = true.
+three : Fin 3
+three = pack 3 refl

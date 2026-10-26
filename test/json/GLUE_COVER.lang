@@ -1,0 +1,2 @@
+bad : (j : I) → (k : I) → Glue ℕ [ j ↦ pack ℕ (idEquiv ℕ) , k ↦ pack ℕ (idEquiv ℕ) ]
+bad j k = glue [ j ↦ 5 ] 5

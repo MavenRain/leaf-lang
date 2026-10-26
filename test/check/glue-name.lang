@@ -1,0 +1,3 @@
+-- glue is a core name (rule R4).
+glue : ℕ
+glue = 0

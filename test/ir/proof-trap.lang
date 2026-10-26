@@ -1,4 +1,4 @@
-evidence : ℕ → Eq ℕ 0 0
+evidence : ℕ → Path ℕ 0 0
 evidence n = flagIf (natEq (natAdd n 1) 0) refl refl
 
 proofMove : ℕ → ℕ
@@ -7,7 +7,7 @@ proofMove n = transport (λ (x : ℕ) → ℕ) (evidence n) 7
 proofSymm : ℕ → ℕ
 proofSymm n = transport (λ (x : ℕ) → ℕ) (symm (evidence n)) 7
 
-baseProof : Eq ℕ 0 0
+baseProof : Path ℕ 0 0
 baseProof = refl
 
 proofTrans : ℕ → ℕ

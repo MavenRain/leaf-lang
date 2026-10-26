@@ -45,10 +45,13 @@ typedef struct {
 typedef enum {
   DECL_DEF,    /* [rec] name : type, then the clause name args = body */
   DECL_AXIOM,  /* postulate name : type */
-  DECL_FAMILY  /* data name params : Type where, then one constructor a line */
+  DECL_FAMILY,  /* data name params : Type where, then one constructor a line */
+  DECL_COFAMILY /* codata name params : Type where, then one observation a
+                   line (S2 U6c1): each Ctor has one Field, the observation
+                   type after the self argument */
 } DeclKind;
 
-/* A family is legal only in the domain file (rule R1). */
+/* A family or a cofamily is legal only in the domain file (rule R1). */
 typedef enum {
   ORIGIN_DOMAIN,
   ORIGIN_PROGRAM

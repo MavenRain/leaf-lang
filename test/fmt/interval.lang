@@ -1,0 +1,13 @@
+-- The interval connectives: `∧` binds tighter than `∨`, both group to the
+-- right, and the operand of `~` is an atom.
+c1 : (e : Path ℕ 0 0) → Path ℕ 0 0
+c1 e i = e (((~ i) ∧ i) ∨ (i ∧ (i ∧ i0)))
+
+c2 : (e : Path ℕ 0 0) → Path ℕ 0 0
+c2 e i = e ((i ∨ i) ∧ (~ (i ∧ i1)))
+
+c3 : (e : Path ℕ 0 0) → Path ℕ 0 0
+c3 e i = e (~(~ i))
+
+c4 : (e : Path ℕ 0 0) → Path ℕ 0 0
+c4 e i = e ((i ∧ i) ∧ (i ∨ (i ∨ i)))

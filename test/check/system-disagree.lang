@@ -1,0 +1,2 @@
+bad : (i : I) → Partial i ℕ
+bad i = [ i ↦ 1 , i ↦ 2 ]

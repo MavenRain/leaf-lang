@@ -1,0 +1,3 @@
+-- unglue needs a term of a Glue type (UNGLUE_TYPE).
+bad : ℕ
+bad = unglue 5

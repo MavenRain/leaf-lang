@@ -46,22 +46,22 @@ awk 'BEGIN {
 build/langc eval "$tmp/binders.lang" value >"$tmp/got"
 cmp "$tmp/want" "$tmp/got"
 
-# bind preserves a Sum error and can change the success type.
+# fold on a Sum keeps the left value and can change the right type.
 cat >"$tmp/sum.lang" <<'EOF'
 input : Sum ℕ ℕ
-input = inl 7
+input = inl ℕ ℕ 7
 
 output : Sum ℕ Bool
-output = bind input (λ x → inr true)
+output = fold (λ e → inl ℕ Bool e) (λ x → inr ℕ Bool true) input
 
 right : Sum ℕ ℕ
-right = inr 7
+right = inr ℕ ℕ 7
 
 mapped : Sum ℕ Bool
-mapped = bind right (λ x → inr true)
+mapped = fold (λ e → inl ℕ Bool e) (λ x → inr ℕ Bool true) right
 EOF
-test "$(build/langc eval "$tmp/sum.lang" output)" = 'inl 7'
-test "$(build/langc eval "$tmp/sum.lang" mapped)" = 'inr true'
+test "$(build/langc eval "$tmp/sum.lang" output)" = 'inl Nat Bool 7'
+test "$(build/langc eval "$tmp/sum.lang" mapped)" = 'inr Nat Bool true'
 # A truncated normal form must not be reported as successful evaluation.
 printf 'value : Stack\nvalue = fold (λ (s : Stack) → push 0 s) bottom 10000\n' >"$tmp/large.lang"
 status=0

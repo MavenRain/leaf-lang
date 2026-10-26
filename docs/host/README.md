@@ -59,8 +59,9 @@ line comment starts with `--`. Lambdas are `λ x → t` or `λ (x : A) → t`.
 The parser also reads the ASCII aliases of `SPEC.md` section 2.3: `->`,
 `\`, `fun x => t`, `*`, `Sigma (x : A) B` and `Nat`. There is no text type.
 
-Core names (`BUILTINS` in `src/front/check.c`): types `ℕ` (core name
-`Nat`), `Bool Unit Sum Option Eq`, values `unit true false inl inr either
+Core names (`BUILTINS` in `src/front/check.c`; `Sum`, `inl` and `inr` are
+declared in `domain/domain.lang`): types `ℕ` (core name
+`Nat`), `Bool Unit Option Eq`, values `unit true false
 none some option pack witness payload pure map bind fold refl symm trans
 transport cong`, Nat operations `natAdd natSub natMul natEq natLe`, and the
 Bool eliminator `flagIf b yes no`. `Type 0 : Type 1` is the universe chain.
@@ -72,7 +73,7 @@ The compiler enforces these rules:
 
 | Rule | Code | The compiler refuses |
 |---|---|---|
-| R1 | `REFUSE_DATA` | a `data` declaration in a program |
+| R1 | `REFUSE_DATA` | a `data` or `codata` declaration in a program |
 | R2 | `REFUSE_AXIOM` | a `postulate` declaration |
 | R3 | `REFUSE_REC` | `rec`, or a definition that refers to itself or to a later definition |
 | R4 | `REFUSE_NAME` | a core name, a domain name, a reserved name or a repeated name as a new definition |
@@ -118,7 +119,7 @@ overflow past 2^64 - 1. `natSub` stops at 0. `Bool` is 0 or 1.
 Compilation is partial evaluation. The compiler normalizes the body of
 each entry with the parameters as free variables. Types and universes erase.
 Proof contents erase, while their trap flags remain. A lambda stays only as the direct function argument of
-`fold`, `map`, `bind`, `either` or `option`. The
+`fold`, `map`, `bind` or `option`. The
 lowering puts its body into a loop or a branch. The lowering refuses two
 programs with a HOST-LIMIT code (see `docs/host/CAPABILITY.md`):
 
@@ -191,7 +192,7 @@ Then `make check` runs `test/review.sh` and the domain regressions of
 
 ## Known limits
 
-- With no expected type, `either`, `map` and `cong` take the result type
+- With no expected type, `map` and `cong` take the result type
   of the function at a fresh variable. A dependent result needs a
   declared type.
 - A definition with a pair, `Sum`, `Option` or other non-scalar result is

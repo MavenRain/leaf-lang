@@ -1,4 +1,5 @@
 data.lang REFUSE_DATA
+codata.lang REFUSE_DATA
 axiom.lang REFUSE_AXIOM
 rec.lang REFUSE_REC
 self.lang REFUSE_REC
@@ -16,3 +17,19 @@ no-type.lang TYPE_INFER
 bare-fun.lang TYPE_INFER
 arity.lang TYPE_ARITY
 not-function.lang TYPE_NOT_FUNCTION
+eq.lang NAME_UNKNOWN
+system-disagree.lang TYPE_SYSTEM
+transp-const.lang TYPE_LINE
+transp-face.lang TYPE_LINE
+transp-name.lang REFUSE_NAME
+hcomp-base.lang TYPE_SYSTEM
+glue-boundary.lang GLUE_BOUNDARY
+glue-cover.lang GLUE_COVER
+glue-equiv.lang GLUE_EQUIV
+unglue-type.lang UNGLUE_TYPE
+glue-name.lang REFUSE_NAME
+hcomp-pretype.lang TYPE_PRETYPE
+fin-bound.lang TYPE_REFL
+face-refl.lang TYPE_REFL
+face-lambda.lang TYPE_ENDPOINT
+glue-pair.lang GLUE_BOUNDARY

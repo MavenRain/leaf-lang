@@ -48,6 +48,18 @@ session):
 - Q6 = (a): the v1 tweakable hash is `Keccak-256(seed || tweak || x)`, one
   call per step, with own vectors and an independent cross-check.
 
+USER rulings on the S2 questions (2026-10-25, AskUserQuestion before the
+S2 slice):
+
+- S2-Q1 = (a): `Path A x y` is the canonical path type. The infix
+  `x ≡ y` waits for implicit arguments (O20).
+- S2-Q2 = (b), not the recommended (a): keep `Sum` as a domain CM. This
+  closes O16.
+- S2-Q3 = (b), not the recommended (a): only the anonymous Sigma
+  `(x : A) × B`. S2 adds no `record` form. `Sig`, `PubKey`, `Tweak` and
+  `Params` are top-level definitions of an iterated anonymous Sigma type
+  (2.2, 3.2).
+
 Not ruled. The plan takes (a) for each of these:
 
 - Q2 kit: (a) by default; the USER did not rule it.
@@ -78,6 +90,30 @@ by default):
   affine signer stops two signatures at one nonce.
 - Proofs: in the guest language only. A Lean export is not a target (Q11).
 
+Claude's readings for S2 (NOT ruled):
+
+- Domain CM (S2-Q2 (b)): 2.1 says that a CM is a family with a type
+  parameter, and only `domain/domain.lang` declares a family. Thus `Sum`
+  leaves the builtin ambient set and becomes a declaration in
+  `domain/domain.lang`: `data Sum (A B : Type) : Type where` with
+  `inl : A → Sum A B` and `inr : B → Sum A B` (S2 unit U6). Each
+  constructor has one field, and each type parameter has exactly one
+  generator. Thus the intent-lang `REFUSE_CELL` criterion (79e1898
+  `src/front/check.c`, `cell_field` and `cell_generators`) admits it. If
+  the leaf-lang port of the criterion refuses `Sum`, S2 stops and the
+  USER rules. `Unit` stays ambient.
+- Cofamily surface (S2-Q3 (b)): there is no `record` form, so a CC is
+  declared as `codata D (A : Type) : Type where` with one observation
+  `eps : D A → A` and fields of type `D A → D A` or `D A → E → D A` (`E`
+  closed data), as the 2.1 CC row says. S2 U6c1 reading: a line is the
+  observation type with an unnamed self argument (`head : Stream A →
+  A`). The block keeps the `data` shape, not the intent-lang `cofamily D
+  params := corec fields` form: the leaf surface has one block form, the
+  corecursor has no surface name, and each line reads as the type of its
+  observation. The intent-lang shape check (`cocell_shape`) reads the
+  lines as the fields of its one clause, so PLAN and the port give the
+  same answers. An admitted codata binds D and its line names (S2 U6c2a).
+
 ## 2. The reading of R1
 
 ### 2.1 The precedent reading
@@ -87,7 +123,7 @@ Q1 (a) and Q2 (a), 2026-10-22) and resolve-lang (PLAN 2) use (Q1):
 
 | Part | Cubical TT | R1 limit |
 |---|---|---|
-| Ambient | Pi, Sigma, `Path`, `PathP`, `I`, `i0`, `i1`, `transp`, `hcomp`, `U`, `Glue`, `ua`, the builtin `Sum` and `Unit` | none: the internal language of the category |
+| Ambient | Pi, Sigma, `Path`, `PathP`, `I`, `i0`, `i1`, `transp`, `hcomp`, `U`, `Glue`, `ua`, the builtin `Unit` (`Sum` is a CM, S2-Q2 (b)) | none: the internal language of the category |
 | CM, cell monad | a `family` with a type parameter: the parameter is the one field of one generator `eta : A -> T A`; each other constructor takes closed base data and arguments of type `T A`, or is a path in `T A` | else `REFUSE_CELL` |
 | CC, cocell comonad | a `cofamily` with one observation `eps : D A -> A`; each other field has type `D A -> D A` or `D A -> E -> D A` with `E` closed data | else `REFUSE_CELL` |
 
@@ -99,26 +135,83 @@ A family with no type parameter is a base type, not a type constructor. R2
 limits it, not R1. Only `domain/domain.lang` declares a family or a
 cofamily. A program that declares one gets `REFUSE_DATA`.
 
+S2 U6a reading: the S1 grammar has no index form, so `data F : Type 0 →
+Type where` is a parse refusal (`PARSE_EXPECT`). The type index and
+and-block arms of the intent-lang criterion are not ported. A use of the
+builtin names `List`, `nil` and `cons` stays `REFUSE_NAME`. A program gets
+`REFUSE_DATA` before the criterion, so the `REFUSE_CELL` rows are in the
+test/fronttool.c domain regressions. A recursive field at the own
+parameters of a cell family passes the criterion and then gets
+`DOMAIN_FAMILY`: S2 U6a has no fold over a recursive family with
+parameters.
+
 ### 2.2 Every type former leaf-lang needs
 
 | Former | Use in leaf-lang | Class | Reason |
 |---|---|---|---|
 | Pi, `A -> B` | every function; vectors `Fin n -> Digest` | ambient | LCC |
 | `A -o B` | at-most-once function (section 4) | ambient | Pi with multiplicity 1 on the binder |
-| Sigma, records | `Sig`, `PubKey`, `Tweak`, `Params` | ambient | named iterated Sigma (quorum-lang Q2 shape) |
+| Sigma, `(x : A) × B` | `Sig`, `PubKey`, `Tweak`, `Params` | ambient | each is a top-level definition of an iterated anonymous Sigma type; there is no `record` form (S2-Q3 (b)) |
 | `A * B` at multiplicity 1 | `Leaf * Keystore` | ambient | Sigma with multiplicity 1 |
-| `Fin n` | positions in a vector | defined | `Sigma (k : Nat), Path Bool (lt k n) true` |
+| `Fin n` | positions in a vector | defined | `Sigma (k : Nat), Path Bool (lt k n) true`; in leaf `Fin n = (k : ℕ) × Path Bool (lt k n) true` with `lt k n = natLe (natAdd k 1) n`, both defs in `domain/domain.lang` (S2 U7; no new builtin or rule) |
 | vectors | WOTS+ signature, auth path, chain ends | ambient | `Fin n -> Digest`, no new former |
 | `Path`, `PathP`, `I`, `transp`, `hcomp` | laws and proofs | ambient | the identity type of Cubical TT |
 | `U`, `Glue`, `ua` | universes; no leaf-lang use yet | ambient | kept as in the precedent |
 | `Option A` | `next` on an empty keystore | CM | one 0-cell `none`, generator `some` |
+| `Sum A B` | kept from the kit (S2-Q2 (b)); a domain family since S2 U6b2 | CM | declared in `domain/domain.lang` as `data Sum (A : Type 0) (B : Type 0)`; generators `inl : (inlOf : A) → Sum A B` and `inr : (inrOf : B) → Sum A B`, one for each type parameter; the eliminator is `fold` (S2 R1 (b): no `either`, no Sum monad) |
 | `Durable A` | the signer effect (commit-before-sign) | CM | generator `done : A -> Durable A`; one operation `commit : Nat -> Durable A -> Durable A` with closed data `Nat` (the free cell monad of one operation, as mandate-lang 4.6) |
 | `Trunc A` | "a valid signature exists" in laws | CM | one 1-cell `squash` |
-| `Stream A` | the keystore reading (section 4.3) | CC | observation `head : Stream A -> A`, field `tail : Stream A -> Stream A` |
+| `Stream A` | the keystore reading (section 4.3) | CC | observation `head : Stream A -> A`, field `tail : Stream A -> Stream A` (shape check S2 U6c1; D, the private D.pos and the destructors S2 U6c2a; the private walk D.walk and corecursor D.corec S2 U6c2b; the bisimulation is deferred: it needs a dependent elim over D.pos, S2-HANDOFF R7) |
 | cons `List A` | none | REFUSED | `cons : A -> List A -> List A` uses `A` outside the generator; vectors over `Fin` do the work |
 | `Bag A`, free monoid | none | not admitted | no bullet needs a multiset or a sequence of unknown length |
 | `Either E A` | none | not admitted | errors are `Option` or `Bool`; no bullet needs an error payload |
 | `data Pair (A : U) := mk A A` | none | REFUSED | `REFUSE_CELL` example of the precedent; the ambient `A * A` is the admitted form |
+
+The proof rules (S2 U4e1). `refl`, `symm`, `trans`, `cong` and `transport`
+are surface rules only. The check elaborates each one to a Core term of the
+cubical layer, and keeps its leaf check and its message:
+
+- `refl a` is `λ i → a` (PLAM).
+- `symm p` is `λ i → p (~ i)`.
+- `trans p q` is `λ i → hcomp A (~ i ∨ i) (λ j → [ ~ i ↦ a , i ↦ q j ]) (p i)`.
+- `cong f p` is `λ i → f (p i)`.
+- `transport P e u` is `transp (λ i → P (e i)) i0 u`.
+
+Two results follow. First, the trap flag of the proof drops under
+`transport` when the line is regular: `transp` over the line `λ i → ℕ`
+gives `u`. This is the zk behavior, where `OP_TRANSP` lowers to
+`runtime_transp` only when it stays unreduced. Second, `transp` at a neutral
+line (`λ i → P 1200` with `P` a variable) stays stuck. There is no
+regularity rule, so `transport P refl u` is not definitionally `u` (as in
+Cubical Agda, where `transportRefl` is a path). The eval row `equality
+moved` shows this term.
+
+S2 U5c adds `transp` at a Glue type with the CCHM formula (CCHM 6.2):
+unglue at `i0`, transport through the base, a fiber of each equivalence at
+`i1`, and `glue` of the parts. CCHM Glue does not keep regularity, so leaf
+has no constant-line rule at Glue either. zk `transp_glue` gives `u` when
+the line is constant, and S2 does not port that rule. `transp` along a
+constant Glue line computes by the formula and can give a `glue` term, not
+`u`. The rows `uaId3` and `uaSwapped` in `test/eval/glue.lang` transport
+along `ua`.
+
+S2 U5 (U5a..U5d) adds Glue types. The core has `Glue A [ φ ↦ pack T e ]`,
+`glue [ φ ↦ t ] a` and `unglue g`. `ua A B e` is a domain definition over
+Glue, so it is `A` at `i0` and `B` at `i1` by computation. `transp` at
+Glue (`transp_glue`, U5c) and `hcomp` at Glue (`hcomp_glue`, U5d) compute.
+When a branch face does not name `i`, the face holds for all `i` on a face
+delta, and `transp_glue` extends the fiber there (`fiber_extend`). The
+rows `transpGl` and `hcompGlue` in `test/eval/glue.lang` show these cases.
+S2 does not port `hcomp` at the universe (zk `hcomp_univ`): `hcomp` at
+`Type n` stays stuck, and the zk rows that need it (`hcompUAt0`) are not
+in leaf. `hcomp` at a pretype is the refusal TYPE_PRETYPE.
+
+S2 U4e2 deletes the old proof Ops `OP_REFL`, `OP_SYMM`, `OP_TRANS`,
+`OP_CONG` and `OP_TRANSPORT`, and the code that only they use
+(`reduce_proof`, `conv_refl`, the `refl` arm of the path conversion,
+`proof_op` and `transport` in the lowering). The Op enum has 50 Ops. The
+`op` column of the five BUILTINS rows is what the rule builds: `OP_PLAM`,
+and `OP_TRANSP` for `transport`. No rule reads this column.
 
 ## 3. The minimal base signature (R2)
 
@@ -155,15 +248,15 @@ its type), law (a guest theorem, section 6).
 | `Digest` | base type | `n` bytes, the hash output | B1 | S4 |
 | `digestEq` | base op | `Digest -> Digest -> Bool`; obligation: decides `Path Digest` | B1 (verify compares a root) | S4 |
 | `digit` | base op | `Nat -> Digest -> Nat -> Nat` (log2 w, digest, position); obligation: result `< w` | B1 (base-w message encoding) | S4 |
-| `Tweak` | defined | record of `Nat`: layer, tree, kind, leaf, chain, step | B1 (RFC 8391 address) | S4 |
+| `Tweak` | defined | iterated Sigma of `Nat`: layer, tree, kind, leaf, chain, step | B1 (RFC 8391 address) | S4 |
 | `thChain` | hash op | `Digest -> Tweak -> Digest -> Digest` (public seed, tweak, value) | B1 (WOTS+ chain step F) | S4 |
 | `thNode` | hash op | `Digest -> Tweak -> Digest -> Digest -> Digest` | B1 (L-tree and Merkle node H) | S4 |
 | `thMsg` | hash op | `Digest -> Digest -> Nat -> Digest -> Digest` (randomness, root, index, message) | B1 (H_msg) | S4 |
 | `prf` | hash op | `Digest -> Tweak -> Digest` (secret seed, tweak) | B1 (WOTS+ secret keys, signing randomness) | S4 |
-| `Params` | defined | record: `n`, `logW`, `h` (section 5.4) | B1, B3 | S4 |
+| `Params` | defined | iterated Sigma: `n`, `logW`, `h` (section 5.4) | B1, B3 | S4 |
 | `chain`, `wotsPk`, `wotsSign`, `wotsPkFromSig`, `ltree`, `treeHash`, `authPath`, `rootFromPath` | defined | RFC 8391 algorithms over the hash ops | B1 | S4 |
-| `PubKey` | defined | record: `root`, `pubSeed`, `params` | B1, B2 | S4 |
-| `Sig` | defined | record: `index : Nat`, `rand : Digest`, `wots : Fin len -> Digest`, `auth : Fin h -> Digest` | B1, B2 | S4 |
+| `PubKey` | defined | iterated Sigma: `root`, `pubSeed`, `params` | B1, B2 | S4 |
+| `Sig` | defined | iterated Sigma: `index : Nat`, `rand : Digest`, `wots : Fin len -> Digest`, `auth : Fin h -> Digest` | B1, B2 | S4 |
 | `verify` | defined | `PubKey -> Digest -> Sig -> Bool` | B1, B2 | S4 |
 | `Leaf` | resource | one unused one-time key; sealed: only `next` makes one (`REFUSE_SEALED`) | B4 | S3 |
 | `Keystore` | resource | the secret seeds, the public key and the signing position; sealed | B4, R4 (EIP-8310) | S3 |
@@ -208,9 +301,8 @@ Readings:
 | `split` of a keystore (EIP-8310 reserved ranges) | no bullet needs two signers on one key; Q12, O5 |
 | kit names `Flag`, `Prod`, `List` (cons), `Eq`, `filter` | `Flag` becomes `Bool`; `Prod` is the ambient Sigma; cons is REFUSED (2.2); `Eq` becomes `Path`; `filter` has no use |
 
-The kit `Sum` former is not in the row above. It stays in S1. `Either` is
-not admitted (2.2). S2 drops or keeps `Sum` with the `REFUSE_CELL` review
-(O16).
+The kit `Sum` former is not in the row above. S2 U6b2 moved it to
+`domain/domain.lang` (O16). `Either` is not admitted (2.2).
 
 ## 4. The affine layer (B4)
 
@@ -444,7 +536,7 @@ on the new checks, docs, close (stage, commit message, next prompt).
 |---|---|---|
 | S0 | kit seed, `design/DESIGN.md`, this plan, README, `AGENTS.md` | `make check` EXIT 0: 13 Wasm modules valid, differential 813 cases 0 mismatches, gate 0 failures, review and domain regressions passed |
 | S1 | surface: Agda-like Unicode (Q14 (b), 7.1), named steps as top-level definitions, `langc fmt`, `W_NONCANON`; `check --json` with progress counts; drop the refused kit names | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 9; check refusals 18; evals 30; ir 10 lowered; wasm 13 modules valid; differential 772 cases, 0 mismatches; fmt 50 canonical, 3 non-canonical pairs (round trip and idempotence); json 20 fixtures, diagnostics 31 codes (18 with a fixture, 13 with no fixture); gate 0 failures; review and domain regressions passed; mutants M1 to M6 killed (docs/STATUS.md, S1) |
-| S2 | kernel port: Path, Sigma, Pi, U, `I`, `transp`, `hcomp`, records, `REFUSE_CELL`, cofamily, `Fin` | port tests; `REFUSE_CELL` mutants |
+| S2 | kernel port: Path, Sigma, Pi, U, `I`, `transp`, `hcomp`, `Glue` and `ua` (S2-Q1 (a)), O18 (kit Ops removed, U2), no `record` form (S2-Q3 (b)), `Sum` as a domain CM (S2-Q2 (b), done in U6b2), `REFUSE_CELL`, cofamily (`codata` keyword and shape check done in U6c1), `Fin` (domain defs `lt` and `Fin`, done in U7) | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 10; check refusals 32; evals 64; ir 10 lowered; wasm 13 modules valid; differential 773 cases, 0 mismatches; fmt 78 canonical, 5 non-canonical pairs (round trip and idempotence); json 28 fixtures, diagnostics 41 codes (26 with a fixture, 15 with no fixture); gate 0 failures; review and domain regressions passed; `REFUSE_CELL` mutants C1, C1w, C2, C3 and mutants U6c2b, U7-M1 killed (docs/STATUS.md, S2) |
 | S3 | affine layer: multiplicities, `-o`, resource sorts, sealed `Leaf` and `Keystore`, `Durable`, the five refusal codes | one test per code; mutants on each refusal |
 | S4 | `Digest`, hash ops (opaque), WOTS+, L-tree, Merkle, `sign`, `verify`; reference Keccak in `langc eval`; L1, L6 | own vectors plus a cross-check with an independent implementation; L1 at h = 4 |
 | S5 | `keygen`, `publicKey`, `next`, `commit`; Wasm signer (Keccak in the module, `commit` import, EIP-8310 JSON in the harness); L3 to L5 | differential eval against Wasm; reset refused |
@@ -482,8 +574,8 @@ on the new checks, docs, close (stage, commit message, next prompt).
   Unicode form. Unicode can cost more tokens; the S9 baseline (Q13)
   measures it.
 - O15: a `let` form under Q14 (b). Open.
-- O16: the kit `Sum` former stays in S1. `Either` is not admitted (2.2).
-  S2 drops or keeps `Sum` with the `REFUSE_CELL` review.
+- O16: CLOSED (S2-Q2 (b), 2026-10-25). `Sum` stays as a CM in
+  `domain/domain.lang` (section 1). `Either` is not admitted (2.2).
 - O17: `flagIf` keeps its kit name (it is not in the S1 drop list). The
   USER rules the name of `if`.
 - O18: dead core paths. The Op values and the eval and lowering code for
@@ -492,6 +584,9 @@ on the new checks, docs, close (stage, commit message, next prompt).
 - O19: the value printer and some check messages use the ASCII kit
   spelling (`->`, `fun x =>`, `Sigma (x : A) B`, `Nat`). The parser reads
   it back through the aliases.
+- O20: the infix path type `x ≡ y` (the Cubical Agda spelling) waits for
+  implicit arguments. Until then `Path A x y` is the only spelling
+  (S2-Q1 (a)).
 
 ## 11. Questions for the USER
 

@@ -1,0 +1,3 @@
+-- Each branch of Glue is pack T e with e : Equiv T A (GLUE_EQUIV).
+bad : (j : I) → Type 0
+bad j = Glue ℕ [ j ↦ pack ℕ 3 ]

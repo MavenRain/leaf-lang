@@ -5,9 +5,9 @@
    is the residual program, and this file writes it as IR statements. Each
    value becomes an Operand: a word and a trap flag (see src/ir.h). An
    eliminator on a heap value loads the tag and the fields of the block,
-   behind a guard on the trap flag. A fold over a list or a linear family
-   walks the spine into a reversed chain, then folds the chain from its last
-   node. The chain is a list: a block [1, word, flag, rest, 0]. */
+   behind a guard on the trap flag. A fold over a linear family walks the
+   spine into a reversed chain, then folds the chain from its last node.
+   The chain is a list: a block [1, word, flag, rest, 0]. */
 #include "front/lower.h"
 
 #include <string.h>
@@ -63,6 +63,13 @@ static int oom(Low *l) {
 
 static int internal(Low *l, const char *what) {
   return diag_fail(l->m->diag, "INTERNAL", l->m->def, "the lowering found %s", what);
+}
+
+/* An interval or path value cannot exist at run time: a path is a proof.
+   Path application at i0 or i1 reduces to an end of the path type, so a
+   path gets here only as run-time data, for example in a fold state. */
+static int runtime_path(Low *l) {
+  return diag_fail(l->m->diag, "REFUSE_RUNTIME_PATH", l->m->def, "an interval or path value must exist at run time");
 }
 
 static IrExpr *expr_alloc(Low *l, IrExprKind kind) {
@@ -629,51 +636,52 @@ static int lower_canon(Low *l, Buf *b, const Value *v, Operand *out) {
   case OP_NAT:
   case OP_BOOL:
   case OP_UNIT:
-  case OP_PROD:
-  case OP_SUM:
   case OP_OPTION:
-  case OP_LIST:
-  case OP_EQ:
   case OP_FAMILY:
   case OP_UNIT_VAL:
   case OP_FALSE:
-  case OP_REFL:
+  case OP_SSET:
+  case OP_I:
+  case OP_PATHP:
+  case OP_PARTIAL:
     return give(l, out, 0, 0);
+  case OP_I0:
+  case OP_I1:
+  case OP_PLAM:
+  case OP_PAPP:
+  case OP_INEG:
+  case OP_IMIN:
+  case OP_IMAX:
+  case OP_SYSTEM:
+  case OP_SYSNIL:
+  case OP_FROMPARTIAL:
+  case OP_TRANSP:
+  case OP_TPART:
+  case OP_TCOD:
+  case OP_HCOMP:
+  case OP_SYSMAP:
+  case OP_GLUE:
+  case OP_GLUE_ELEM:
+  case OP_UNGLUE:
+    return runtime_path(l);
   case OP_TRUE:
     return give(l, out, 1, 0);
-  case OP_PAIR:
   case OP_PACK:
     return ctor_full(l, b, v, 0, 2, 0, out);
-  case OP_INL:
-    return ctor_full(l, b, v, 0, 1, 0, out);
-  case OP_INR:
   case OP_SOME:
     return ctor_full(l, b, v, 0, 1, 1, out);
   case OP_NONE:
-  case OP_NIL:
     return ctor_full(l, b, v, 0, 0, 0, out);
-  case OP_CONS:
-    return ctor_full(l, b, v, 0, 2, 1, out);
   case OP_CTOR:
     return lower_ctor(l, b, v, out);
-  case OP_FIRST:
-  case OP_SECOND:
-  case OP_EITHER:
   case OP_OPTION_ELIM:
   case OP_PURE:
   case OP_MAP:
   case OP_BIND:
   case OP_FOLD_NAT:
-  case OP_FOLD_LIST:
   case OP_FOLD_FAMILY:
-  case OP_UNFOLD:
-  case OP_FILTER:
   case OP_WITNESS:
   case OP_PAYLOAD:
-  case OP_SYMM:
-  case OP_TRANS:
-  case OP_TRANSPORT:
-  case OP_CONG:
   case OP_NAT_ADD:
   case OP_NAT_SUB:
   case OP_NAT_MUL:
@@ -763,9 +771,6 @@ static int two_cases(Low *l, Buf *b, const Value *v, uint32_t none_fields, Opera
 /* A constructor without a recursive field. */
 #define NO_REC UINT32_MAX
 
-/* The recursive field of each list tag: nil has none, cons has the tail. */
-static const uint32_t LIST_REC[2] = {NO_REC, 1u};
-
 /* The locals of a walk: the reversed chain, its length, the trap flag of
    the end, the node where the walk stopped, and the WHILE condition. */
 typedef struct {
@@ -837,153 +842,9 @@ static int chain_node(Low *l, Buf *body, const Walk *w, const IrExpr **node) {
   return set(l, body, t, ex_load(l, ex_local(l, w->rev), 1));
 }
 
-/* The start of a pass over a chain of list nodes: H := the head. */
-static int chain_head(Low *l, Buf *body, const Walk *w, Operand *h) {
-  const IrExpr *node;
-  return chain_node(l, body, w, &node) && field_at(l, body, node, 0, h);
-}
-
 /* The end of a pass: REV := the next cell, and REPEAT COUNT {BODY}. */
 static int chain_end(Low *l, Buf *b, const Walk *w, Buf *body) {
   return set(l, body, w->rev, ex_load(l, ex_local(l, w->rev), 3)) && st_repeat(l, b, ex_local(l, w->count), body);
-}
-
-/* OUT := a trap tail when the flag local END is 1, else nil. */
-static int tail_init(Low *l, Buf *b, uint32_t end, Slot out) {
-  Operand nil;
-  Buf in = buf_under(b);
-  return block_ops(l, &in, 0, NULL, 0, &nil) && store(l, &in, out, nil) && guard(l, b, ex_local(l, end), out, &in);
-}
-
-/* OUT := a new cons cell [1, H, OUT]. */
-static int prepend(Low *l, Buf *b, Operand h, Slot out) {
-  Operand ops[2];
-  Operand c;
-  ops[0] = h;
-  ops[1] = slot_get(l, out);
-  return block_ops(l, b, 1, ops, 2u, &c) && store(l, b, out, c);
-}
-
-/* A right fold over a list. F takes the head, then the acc. A trap tail
-   gives a trap base acc. */
-static int fold_list(Low *l, Buf *b, const Value *v, Operand *out) {
-  Operand x;
-  Operand args[2];
-  Walk w;
-  Slot acc = slot_new(l);
-  Buf in = buf_under(b);
-  Buf body = buf_under(b);
-  *out = slot_get(l, acc);
-  args[1] = slot_get(l, acc);
-  return lower(l, b, v->args[2], &x) && walk(l, b, x, LIST_REC, 2u, &w) && lower_into(l, &in, v->args[1], acc) &&
-         guard(l, b, ex_local(l, w.end), acc, &in) && chain_head(l, &body, &w, &args[0]) &&
-         apply_into(l, &body, v->args[0], args, 2u, acc) && chain_end(l, b, &w, &body);
-}
-
-/* MAP on a list. A trap tail stays a trap tail. */
-static int list_map(Low *l, Buf *b, const Value *v, Operand *out) {
-  Operand x;
-  Operand h;
-  Walk w;
-  Slot res = slot_new(l);
-  Slot ys = slot_new(l);
-  Buf body = buf_under(b);
-  *out = slot_get(l, res);
-  return lower(l, b, v->args[1], &x) && walk(l, b, x, LIST_REC, 2u, &w) && tail_init(l, b, w.end, res) &&
-         chain_head(l, &body, &w, &h) && apply_into(l, &body, v->args[0], &h, 1u, ys) &&
-         prepend(l, &body, slot_get(l, ys), res) && chain_end(l, b, &w, &body);
-}
-
-/* BIND on a list. The pass starts at the last node, so a result of F with
-   a trap tail drops the items after it. */
-static int list_bind(Low *l, Buf *b, const Value *v, Operand *out) {
-  Operand x;
-  Operand h;
-  Operand y;
-  Walk w;
-  Walk u;
-  Slot res = slot_new(l);
-  Slot rs = slot_new(l);
-  Buf body = buf_under(b);
-  Buf inner = buf_under(&body);
-  Buf none = buf_under(&body);
-  *out = slot_get(l, res);
-  return lower(l, b, v->args[0], &x) && walk(l, b, x, LIST_REC, 2u, &w) && tail_init(l, b, w.end, res) &&
-         chain_head(l, &body, &w, &h) && apply_into(l, &body, v->args[1], &h, 1u, rs) &&
-         walk(l, &body, slot_get(l, rs), LIST_REC, 2u, &u) && guard(l, &body, ex_local(l, u.end), res, &none) &&
-         chain_head(l, &inner, &u, &y) && prepend(l, &inner, y, res) && chain_end(l, &body, &u, &inner) &&
-         chain_end(l, b, &w, &body);
-}
-
-/* FILTER on a list. The pass starts at the last node, so a trapped test
-   drops the items after it: the result is the items kept before the first
-   trapped test, then a trap tail. */
-static int list_filter(Low *l, Buf *b, const Value *v, Operand *out) {
-  Operand x;
-  Operand h;
-  Walk w;
-  Slot res = slot_new(l);
-  Slot ts = slot_new(l);
-  Buf body = buf_under(b);
-  Buf keep = buf_under(&body);
-  Buf drop = buf_under(&body);
-  Buf test = buf_under(&body);
-  *out = slot_get(l, res);
-  return lower(l, b, v->args[1], &x) && walk(l, b, x, LIST_REC, 2u, &w) && tail_init(l, b, w.end, res) &&
-         chain_head(l, &body, &w, &h) && apply_into(l, &body, v->args[0], &h, 1u, ts) && prepend(l, &keep, h, res) &&
-         if_flag(l, &test, ex_local(l, ts.w), &keep, &drop) && guard(l, &body, ex_local(l, ts.f), res, &test) &&
-         chain_end(l, b, &w, &body);
-}
-
-/* An unfold that ends at a trap: END := 1, and the WHILE stops. */
-static int unfold_stop(Low *l, Buf *b, const Walk *w) {
-  return set(l, b, w->end, ex_const(l, 1)) && set(l, b, w->cont, ex_const(l, 0));
-}
-
-/* Push the item of the pair at P, then SEED := the next seed. */
-static int unfold_push(Low *l, Buf *b, const Walk *w, const IrExpr *p, Slot seed) {
-  Operand a;
-  Operand s;
-  return field_at(l, b, p, 0, &a) && field_at(l, b, p, 1, &s) && chain_push(l, b, w, a) && store(l, b, seed, s);
-}
-
-/* The WHILE body of an unfold: R := G SEED. None stops; a trap or some(trap)
-   stops with END = 1; some(pair) pushes the item. */
-static int unfold_step(Low *l, Buf *b, const Walk *w, const Value *g, Slot seed) {
-  Operand s = slot_get(l, seed);
-  Operand p;
-  Slot rs = slot_new(l);
-  Operand r = slot_get(l, rs);
-  Buf stop = buf_under(b);
-  Buf stop_some = buf_under(b);
-  Buf push = buf_under(b);
-  Buf some = buf_under(b);
-  Buf none = buf_under(b);
-  Buf tag = buf_under(b);
-  return apply_into(l, b, g, &s, 1u, rs) && field_at(l, &some, r.w, 0, &p) && unfold_push(l, &push, w, p.w, seed) &&
-         unfold_stop(l, &stop_some, w) && if_flag(l, &some, p.f, &stop_some, &push) &&
-         set(l, &none, w->cont, ex_const(l, 0)) && if_flag(l, &tag, ex_load(l, r.w, 0), &some, &none) &&
-         unfold_stop(l, &stop, w) && if_flag(l, b, r.f, &stop, &tag);
-}
-
-/* UNFOLD G LIMIT SEED. The WHILE pushes the items on a chain, then a pass
-   from the last item builds the list. A trap limit gives a trap. */
-static int unfold(Low *l, Buf *b, const Value *v, Operand *out) {
-  Operand lim;
-  Operand h;
-  Walk w = walk_new(l);
-  Slot res = slot_new(l);
-  Slot seed = slot_new(l);
-  Buf in = buf_under(b);
-  Buf step = buf_under(&in);
-  Buf body = buf_under(&in);
-  *out = slot_get(l, res);
-  return lower(l, b, v->args[1], &lim) && set(l, &in, w.rev, ex_const(l, 0)) && set(l, &in, w.count, ex_const(l, 0)) &&
-         set(l, &in, w.end, ex_const(l, 0)) && set(l, &in, w.cont, ex_const(l, 1)) &&
-         lower_into(l, &in, v->args[2], seed) && unfold_step(l, &step, &w, v->args[0], seed) &&
-         st_while(l, &in, lim.w, w.cont, &step) && tail_init(l, &in, w.end, res) &&
-         field_at(l, &body, ex_local(l, w.rev), 0, &h) && prepend(l, &body, h, res) && chain_end(l, &in, &w, &body) &&
-         guard(l, b, lim.f, res, &in);
 }
 
 /* A fold step at the node ADDR of the constructor C: ACC := FN applied to
@@ -1078,7 +939,7 @@ static int two_arms(Low *l, Buf *b, Operand x, const Buf *a0, const Buf *a1, Slo
   return st_switch(l, &in, ex_load(l, x.w, 0), arms, 2u) && guard(l, b, x.f, res, &in);
 }
 
-/* Lowers the option or sum XV into X. Arm 0 gets RES := X; arm 1 gets P :=
+/* Lowers the option XV into X. Arm 0 gets RES := X; arm 1 gets P :=
    the payload. */
 static int carrier_begin(Low *l, Buf *b, const Value *xv, Slot res, Operand *x, Buf *a0, Buf *a1, Operand *p) {
   return lower(l, b, xv, x) && store(l, a0, res, *x) && field_at(l, a1, x->w, 0, p);
@@ -1110,29 +971,6 @@ static int carrier_bind(Low *l, Buf *b, const Value *v, Operand *out) {
          two_arms(l, b, x, &a0, &a1, res);
 }
 
-static int carrier_filter(Low *l, Buf *b, const Value *v, Operand *out) {
-  Operand x;
-  Operand p;
-  Operand y;
-  Slot res = slot_new(l);
-  Slot ts = slot_new(l);
-  Buf a0 = buf_under(b);
-  Buf a1 = buf_under(b);
-  Buf keep = buf_under(&a1);
-  Buf drop = buf_under(&a1);
-  Buf test = buf_under(&a1);
-  *out = slot_get(l, res);
-  return carrier_begin(l, b, v->args[1], res, &x, &a0, &a1, &p) && apply_into(l, &a1, v->args[0], &p, 1, ts) &&
-         store(l, &keep, res, x) && block_ops(l, &drop, 0, NULL, 0, &y) && store(l, &drop, res, y) &&
-         if_flag(l, &test, ex_local(l, ts.w), &keep, &drop) && guard(l, &a1, ex_local(l, ts.f), res, &test) &&
-         two_arms(l, b, x, &a0, &a1, res);
-}
-
-/* FILTER on a list, or on a sum. */
-static int not_option(Low *l, Buf *b, const Value *v, Operand *out) {
-  return v->inst == CARRIER_LIST ? list_filter(l, b, v, out) : internal(l, "a filter over a sum");
-}
-
 /* ACC := Z, then ACC := STEP ACC, N times. */
 static int fold_nat(Low *l, Buf *b, const Value *v, Operand *out) {
   Operand n;
@@ -1146,89 +984,62 @@ static int fold_nat(Low *l, Buf *b, const Value *v, Operand *out) {
          st_repeat(l, &in, n.w, &body) && guard(l, b, n.f, acc, &in);
 }
 
-/* Proof contents erase, but forcing a proof must preserve its trap flag. */
-static int proof_op(Low *l, Buf *b, const Value *v, uint32_t first, uint32_t count, Operand *out) {
-  Operand p;
-  const IrExpr *flag = ex_const(l, 0);
-  uint32_t i;
-  for (i = first; i < first + count; i++) {
-    if (!lower(l, b, v->args[i], &p))
-      return 0;
-    flag = ex_or(l, flag, p.f);
-  }
-  return atoms(l, b, ex_const(l, 0), flag, out);
-}
-
-static int transport(Low *l, Buf *b, const Value *v, Operand *out) {
-  Operand proof;
-  Slot res = slot_new(l);
-  Buf in = buf_under(b);
-  *out = slot_get(l, res);
-  return lower(l, b, v->args[1], &proof) && lower_into(l, &in, v->args[2], res) &&
-         guard(l, b, proof.f, res, &in);
-}
-
 /* An eliminator on a variable. */
 static int lower_stuck(Low *l, Buf *b, const Value *v, Operand *out) {
   switch (v->op) {
   case OP_NAT:
   case OP_BOOL:
   case OP_UNIT:
-  case OP_PROD:
-  case OP_SUM:
   case OP_OPTION:
-  case OP_LIST:
-  case OP_EQ:
   case OP_FAMILY:
   case OP_UNIT_VAL:
   case OP_TRUE:
   case OP_FALSE:
-  case OP_PAIR:
-  case OP_INL:
-  case OP_INR:
   case OP_NONE:
   case OP_SOME:
-  case OP_NIL:
-  case OP_CONS:
   case OP_PACK:
-  case OP_REFL:
   case OP_CTOR:
   case OP_PURE:
+  case OP_SSET:
+  case OP_I:
+  case OP_I0:
+  case OP_I1:
+  case OP_PATHP:
+  case OP_PLAM:
+  case OP_PARTIAL:
+  case OP_SYSTEM:
+  case OP_SYSNIL:
     return internal(l, "a stuck canonical value");
-  case OP_FIRST:
+  case OP_PAPP:
+  case OP_INEG:
+  case OP_IMIN:
+  case OP_IMAX:
+  case OP_FROMPARTIAL:
+  case OP_TRANSP:
+  case OP_TPART:
+  case OP_TCOD:
+  case OP_HCOMP:
+  case OP_SYSMAP:
+  case OP_GLUE:
+  case OP_GLUE_ELEM:
+  case OP_UNGLUE:
+    return runtime_path(l);
   case OP_WITNESS:
     return field_of(l, b, v->args[0], 0, out);
-  case OP_SECOND:
   case OP_PAYLOAD:
     return field_of(l, b, v->args[0], 1, out);
   case OP_PROJ:
     return field_of(l, b, v->args[0], v->field, out);
-  case OP_EITHER:
-    return two_cases(l, b, v, 1, out);
   case OP_OPTION_ELIM:
     return two_cases(l, b, v, 0, out);
   case OP_MAP:
-    return v->inst == CARRIER_LIST ? list_map(l, b, v, out) : carrier_map(l, b, v, out);
+    return carrier_map(l, b, v, out);
   case OP_BIND:
-    return v->inst == CARRIER_LIST ? list_bind(l, b, v, out) : carrier_bind(l, b, v, out);
-  case OP_FILTER:
-    return v->inst == CARRIER_OPTION ? carrier_filter(l, b, v, out) : not_option(l, b, v, out);
+    return carrier_bind(l, b, v, out);
   case OP_FOLD_NAT:
     return fold_nat(l, b, v, out);
-  case OP_FOLD_LIST:
-    return fold_list(l, b, v, out);
-  case OP_UNFOLD:
-    return unfold(l, b, v, out);
   case OP_FOLD_FAMILY:
     return family_fold(l, b, v, out);
-  case OP_SYMM:
-    return proof_op(l, b, v, 0, 1, out);
-  case OP_TRANS:
-    return proof_op(l, b, v, 0, 2, out);
-  case OP_CONG:
-    return proof_op(l, b, v, 1, 1, out);
-  case OP_TRANSPORT:
-    return transport(l, b, v, out);
   case OP_NAT_ADD:
     return nat_bin(l, b, v, IR_OP_ADD, 1, out);
   case OP_NAT_SUB:

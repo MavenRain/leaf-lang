@@ -2,7 +2,9 @@
      decl   := 'postulate' NAME ':' term
              | 'rec'? NAME ':' term NAME NAME* '=' term
              | 'data' NAME group* ':' 'Type' 'where' ctor+
+             | 'codata' NAME group* ':' 'Type' 'where' obs+
      ctor   := NAME ':' term
+     obs    := NAME ':' NAME NAME* '→' term
      group  := '(' NAME+ ':' term ')'
      term   := ('λ' | '\') (NAME | group)+ '→' term
              | 'fun' (NAME | group)+ '=>' term
@@ -14,7 +16,12 @@
    line, at a column <= STOP, ends the current term as end of input does. The
    clause line repeats the signature name. In a `data` block the first
    constructor sets the constructor column; each constructor starts a new
-   line at that column. */
+   line at that column. A `codata` block (S2 U6c1) has the same layout:
+   one observation a line, `head : D p1 .. pn → T`, with no name on the
+   self argument. It keeps the `data` block shape, not the intent-lang
+   `cofamily D params := corec fields` form: the leaf surface has one
+   block form (S2-Q3 (b), no `record`), the corecursor has no surface
+   name, and each line reads as the type of its observation. */
 #include <string.h>
 
 #include "front/parser.h"
@@ -174,6 +181,7 @@ static int starts_atom(TokKind kind) {
     case TOK_LPAREN:
     case TOK_KW_TYPE:
     case TOK_KW_SIGMA:
+    case TOK_LBRACK:
       return 1;
     case TOK_EOF:
     case TOK_RPAREN:
@@ -187,8 +195,15 @@ static int starts_atom(TokKind kind) {
     case TOK_KW_REC:
     case TOK_KW_FUN:
     case TOK_KW_DATA:
+    case TOK_KW_CODATA:
     case TOK_KW_WHERE:
     case TOK_KW_POSTULATE:
+    case TOK_TILDE: /* `p ~ i` is not an application; write `p (~ i)` */
+    case TOK_MEET:
+    case TOK_JOIN:
+    case TOK_RBRACK:
+    case TOK_COMMA:
+    case TOK_MAPSTO:
       return 0;
   }
   return 0;
@@ -318,6 +333,82 @@ static const Term *parse_leaf(Parser *p, TermKind kind) {
   return kind == TERM_VAR && term->name == NULL ? NULL : term;
 }
 
+/* `~ r`, `r ∧ s` and `r ∨ s` are applications of the builtin NAME. No
+   identifier can spell these names. */
+static const Term *make_op(Parser *p, const Token *op, const char *name, const Term *left, const Term *right) {
+  Term *head = make_term(p, TERM_VAR, op->line, op->col);
+  Term *one = head == NULL ? NULL : make_term(p, TERM_APP, right == NULL ? op->line : left->line, right == NULL ? op->col : left->col);
+  if (one == NULL) return NULL;
+  head->name = name;
+  head->nat = 0;
+  head->left = NULL;
+  head->right = NULL;
+  one->left = head;
+  one->right = left;
+  if (right == NULL) return one;
+  Term *two = make_term(p, TERM_APP, left->line, left->col);
+  if (two == NULL) return NULL;
+  two->left = one;
+  two->right = right;
+  return two;
+}
+
+/* `~ r`: the operand is an atom, as in Agda. `~ ~ i` nests, so it counts
+   toward the depth limit. */
+static const Term *parse_neg(Parser *p) {
+  const Token *op = cur(p);
+  bump(p);
+  const Term *arg = enter(p) ? parse_atom(p) : NULL;
+  p->depth--;
+  return arg == NULL ? NULL : make_op(p, op, "~", arg, NULL);
+}
+
+/* The empty system `[]` is the builtin name `[]`. No identifier can spell
+   it. */
+static const Term *make_nil(Parser *p, const Token *tok) {
+  Term *nil = make_term(p, TERM_VAR, tok->line, tok->col);
+  if (nil == NULL) return NULL;
+  nil->name = "[]";
+  nil->nat = 0;
+  nil->left = NULL;
+  nil->right = NULL;
+  return nil;
+}
+
+/* The cells after `[` or `,`: `φ ↦ u`, then `,` and the next cells, or
+   `]`. The cell `φ ↦ u` before REST is APP(APP(APP(VAR "↦", φ), u),
+   REST), so no new term kind is necessary. Each cell counts toward the
+   depth limit. */
+static const Term *parse_cells(Parser *p) {
+  const Term *face = parse_term(p);
+  const Token *op = face == NULL ? NULL : cur(p);
+  const Term *body = op != NULL && expect(p, TOK_MAPSTO, "'↦'") ? parse_term(p) : NULL;
+  const Token *close = body == NULL ? NULL : cur(p);
+  const Term *rest = NULL;
+  if (close != NULL && eat(p, TOK_COMMA)) {
+    rest = enter(p) ? parse_cells(p) : NULL;
+    p->depth--;
+  } else if (close != NULL && expect(p, TOK_RBRACK, "',' or ']'")) {
+    rest = make_nil(p, close);
+  }
+  const Term *cell = rest == NULL ? NULL : make_op(p, op, "↦", face, body);
+  Term *app = cell == NULL ? NULL : make_term(p, TERM_APP, face->line, face->col);
+  if (app == NULL) return NULL;
+  app->left = cell;
+  app->right = rest;
+  return app;
+}
+
+/* `[ φ ↦ u , ψ ↦ v ]` and `[]`. */
+static const Term *parse_system(Parser *p) {
+  const Token *open = cur(p);
+  bump(p);
+  if (eat(p, TOK_RBRACK)) return make_nil(p, open);
+  const Term *cells = enter(p) ? parse_cells(p) : NULL;
+  p->depth--;
+  return cells;
+}
+
 static const Term *parse_atom(Parser *p) {
   const Token *tok = cur(p);
   switch (kind_of(p)) {
@@ -326,6 +417,8 @@ static const Term *parse_atom(Parser *p) {
     case TOK_LPAREN: return parse_paren(p);
     case TOK_KW_TYPE: return parse_universe(p);
     case TOK_KW_SIGMA: return parse_sigma(p);
+    case TOK_TILDE: return parse_neg(p);
+    case TOK_LBRACK: return parse_system(p);
     case TOK_EOF:
     case TOK_RPAREN:
     case TOK_COLON:
@@ -338,8 +431,14 @@ static const Term *parse_atom(Parser *p) {
     case TOK_KW_REC:
     case TOK_KW_FUN:
     case TOK_KW_DATA:
+    case TOK_KW_CODATA:
     case TOK_KW_WHERE:
     case TOK_KW_POSTULATE:
+    case TOK_MEET:
+    case TOK_JOIN:
+    case TOK_RBRACK:
+    case TOK_COMMA:
+    case TOK_MAPSTO:
       break;
   }
   fail_at(p, tok, "a term");
@@ -369,6 +468,29 @@ static const Term *make_binary(Parser *p, TermKind kind, const Token *op, const 
   return node;
 }
 
+/* The interval connectives. Level 0 is `∨`, level 1 is `∧` (tighter). */
+static const struct {
+  TokKind kind;
+  const char *name;
+} INFIX[] = {
+  {TOK_JOIN, "∨"},
+  {TOK_MEET, "∧"},
+};
+
+/* `r ∧ s` and `r ∨ s` bind looser than application and tighter than `×`
+   and `→`. Both group to the right, as the value printer does. A chain
+   nests, so its right operand counts toward the depth limit. */
+static const Term *parse_infix(Parser *p, size_t level) {
+  if (level == sizeof INFIX / sizeof INFIX[0]) return parse_app(p);
+  const Term *head = parse_infix(p, level + 1u);
+  if (head == NULL || !at(p, INFIX[level].kind)) return head;
+  const Token *op = cur(p);
+  bump(p);
+  const Term *rest = enter(p) ? parse_infix(p, level) : NULL;
+  p->depth--;
+  return rest == NULL ? NULL : make_op(p, op, INFIX[level].name, head, rest);
+}
+
 static const Term *parse_binder_type(Parser *p) {
   Binders b;
   if (!parse_group(p, &b)) return NULL;
@@ -384,7 +506,7 @@ static const Term *parse_binder_type(Parser *p) {
 
 static const Term *parse_prod_body(Parser *p) {
   if (at_binder_group(p)) return parse_binder_type(p);
-  const Term *head = parse_app(p);
+  const Term *head = parse_infix(p, 0u);
   if (head == NULL || !at(p, TOK_TIMES)) return head;
   const Token *op = cur(p);
   bump(p);
@@ -532,6 +654,14 @@ static int ctor_fail(Parser *p, const Ctor *ctor, size_t type_start, const char 
                       "%s:%d:%d: the constructor %s %s", p->source, ctor->line, ctor->col, ctor->name, why);
 }
 
+/* The text `F p1 .. pn` of the data type at its parameters. */
+static void applied_name(const Decl *d, char *out, size_t size) {
+  size_t used = (size_t)snprintf(out, size, "%s", d->name);
+  for (size_t i = 0; i < d->param_count && used < size; i++) {
+    used += (size_t)snprintf(out + used, size - used, " %s", d->params[i].name);
+  }
+}
+
 /* `(x : A) → .. → F p1 .. pn` gives the fields x ... */
 static int split_ctor(Parser *p, const Decl *d, Ctor *ctor, const Term *type, size_t type_start) {
   size_t count = 0;
@@ -542,10 +672,7 @@ static int split_ctor(Parser *p, const Decl *d, Ctor *ctor, const Term *type, si
   }
   if (t->kind == TERM_PI) return ctor_fail(p, ctor, type_start, "(name : A) →", "has a field without a name");
   char result[256];
-  size_t used = (size_t)snprintf(result, sizeof result, "%s", d->name);
-  for (size_t i = 0; i < d->param_count && used < sizeof result; i++) {
-    used += (size_t)snprintf(result + used, sizeof result - used, " %s", d->params[i].name);
-  }
+  applied_name(d, result, sizeof result);
   char why[320];
   snprintf(why, sizeof why, "must end in %s", result);
   if (!ctor_result_ok(d, t)) return ctor_fail(p, ctor, type_start, result, why);
@@ -564,6 +691,25 @@ static int split_ctor(Parser *p, const Decl *d, Ctor *ctor, const Term *type, si
   return 1;
 }
 
+/* `D p1 .. pn → T` gives the one field T of the observation, named as the
+   line. The self argument has no name, so T cannot depend on it. */
+static int split_obs(Parser *p, const Decl *d, Ctor *ctor, const Term *type, size_t type_start) {
+  char self[256];
+  applied_name(d, self, sizeof self);
+  char why[320];
+  snprintf(why, sizeof why, "must start with %s →", self);
+  if (type->kind != TERM_PI || type->name != NULL || !ctor_result_ok(d, type->left)) return ctor_fail(p, ctor, type_start, self, why);
+  Field *field = arena_alloc(p->arena, sizeof *field);
+  if (field == NULL) return oom(p);
+  field->name = ctor->name;
+  field->type = type->right;
+  field->line = ctor->line;
+  field->col = ctor->col;
+  ctor->fields = field;
+  ctor->field_count = 1;
+  return 1;
+}
+
 static int parse_ctor(Parser *p, const Decl *d, Ctor *ctor, int column) {
   ctor->line = cur(p)->line;
   ctor->col = cur(p)->col;
@@ -573,16 +719,18 @@ static int parse_ctor(Parser *p, const Decl *d, Ctor *ctor, int column) {
   p->stop = column;
   const Term *type = parse_term(p);
   p->stop = 1;
-  return type != NULL && split_ctor(p, d, ctor, type, type_start);
+  if (type == NULL) return 0;
+  return d->kind == DECL_COFAMILY ? split_obs(p, d, ctor, type, type_start) : split_ctor(p, d, ctor, type, type_start);
 }
 
 static int at_ctor(const Parser *p, int column) {
   return cur(p)->kind != TOK_EOF && first_on_line(p) && cur(p)->col == column;
 }
 
+/* `data` and `codata` (S2 U6c1) share the block form. */
 static int parse_data(Parser *p, Decl *d) {
+  d->kind = at(p, TOK_KW_CODATA) ? DECL_COFAMILY : DECL_FAMILY;
   bump(p);
-  d->kind = DECL_FAMILY;
   d->name = take_name(p, "a data type name");
   p->stop = 1;
   if (d->name == NULL) return 0;
@@ -609,7 +757,8 @@ static int parse_data(Parser *p, Decl *d) {
 static int parse_decl_body(Parser *p, Decl *d) {
   switch (cur(p)->kind) {
     case TOK_KW_POSTULATE: return parse_postulate(p, d);
-    case TOK_KW_DATA: return parse_data(p, d);
+    case TOK_KW_DATA:
+    case TOK_KW_CODATA: return parse_data(p, d);
     case TOK_KW_REC:
     case TOK_IDENT: return parse_def(p, d);
     case TOK_EOF:
@@ -627,6 +776,13 @@ static int parse_decl_body(Parser *p, Decl *d) {
     case TOK_KW_WHERE:
     case TOK_KW_TYPE:
     case TOK_KW_SIGMA:
+    case TOK_TILDE:
+    case TOK_MEET:
+    case TOK_JOIN:
+    case TOK_LBRACK:
+    case TOK_RBRACK:
+    case TOK_COMMA:
+    case TOK_MAPSTO:
       break;
   }
   return fail_at(p, cur(p), "a signature, 'rec', 'postulate' or 'data'");

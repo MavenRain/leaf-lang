@@ -20,10 +20,18 @@ typedef enum {
   TOK_KW_REC,
   TOK_KW_FUN,   /* the alias of λ */
   TOK_KW_DATA,
+  TOK_KW_CODATA,
   TOK_KW_WHERE,
   TOK_KW_POSTULATE,
   TOK_KW_TYPE,
-  TOK_KW_SIGMA  /* the alias of × with a binder */
+  TOK_KW_SIGMA, /* the alias of × with a binder */
+  TOK_TILDE,    /* ~ (interval reversal) */
+  TOK_MEET,     /* ∧ */
+  TOK_JOIN,     /* ∨ */
+  TOK_LBRACK,   /* [ (a system) */
+  TOK_RBRACK,   /* ] */
+  TOK_COMMA,    /* , (between the cells of a system) */
+  TOK_MAPSTO    /* ↦ */
 } TokKind;
 
 /* LINE and COL are 1-based; COL counts code points. END_COL is the column

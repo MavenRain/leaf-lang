@@ -1,0 +1,2 @@
+f : (e : Path ℕ 0 0) → Path ℕ 0 0
+f e i = e ~ i

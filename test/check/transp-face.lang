@@ -1,0 +1,2 @@
+bad : (e : Path (Type 0) ℕ ℕ) → (i : I) → Partial i ℕ
+bad e i = [ i ↦ transp (λ j → e (i ∧ j)) i1 0 ]

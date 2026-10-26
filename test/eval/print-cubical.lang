@@ -1,0 +1,11 @@
+glueType : I → Type 0
+glueType i = Glue ℕ [ i ↦ pack ℕ (idEquiv ℕ) ]
+
+glueValue : (i : I) → glueType i
+glueValue i = glue [ i ↦ 7 ] 7
+
+unglueValue : (i : I) → glueType i → ℕ
+unglueValue i x = unglue x
+
+hcompValue : (A : Type 0) → A → A
+hcompValue A x = hcomp (λ j → []) x

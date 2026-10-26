@@ -1,0 +1,61 @@
+-- Port tests for Glue types (S2 U5b). glue and unglue compute where a
+-- face holds, unglue of a glue is its base, and ua A B e is A at i0 and B
+-- at i1. unglue at a face that holds has no Glue type, so the closed cases
+-- go through gl, which takes the face as a parameter.
+gl : (j : I) → Glue ℕ [ j ↦ pack ℕ (idEquiv ℕ) ]
+gl j = glue [ j ↦ 7 ] 7
+
+ung : (j : I) → ℕ
+ung j = unglue (gl j)
+
+ungAt1 : ℕ
+ungAt1 = ung i1
+
+ungAt0 : ℕ
+ungAt0 = ung i0
+
+uaAt0 : ua ℕ ℕ (idEquiv ℕ) i0
+uaAt0 = 4
+
+uaAt1 : ua ℕ ℕ (idEquiv ℕ) i1
+uaAt1 = 5
+
+-- S2 U5c: transp along ua. Along ua of idEquiv, transp is the identity.
+uaId3 : ℕ
+uaId3 = transp (λ i → ua ℕ ℕ (idEquiv ℕ) i) i0 3
+
+-- An equivalence between two products, by hand: swap and its inverse.
+-- transp along ua of it computes to swap.
+swap : (x : ℕ) × Bool → (y : Bool) × ℕ
+swap p = pack (payload p) (witness p)
+
+swapBack : (y : Bool) × ℕ → (x : ℕ) × Bool
+swapBack p = pack (payload p) (witness p)
+
+swapEquiv : Equiv ((x : ℕ) × Bool) ((y : Bool) × ℕ)
+swapEquiv = pack swap (λ y → pack (pack (swapBack y) refl) (λ z i → pack (swapBack (payload z (~ i))) (λ j → payload z (~ i ∨ j))))
+
+swapped : (y : Bool) × ℕ
+swapped = witness swapEquiv (pack 3 true)
+
+uaSwap : Path (Type 0) ((x : ℕ) × Bool) ((y : Bool) × ℕ)
+uaSwap = ua ((x : ℕ) × Bool) ((y : Bool) × ℕ) swapEquiv
+
+uaSwapped : (y : Bool) × ℕ
+uaSwapped = transp (λ i → uaSwap i) i0 (pack 3 true)
+
+-- S2 U5d: hcomp at a Glue type. With an empty side it is glue of the
+-- parts again, and unglue of it is the base.
+hcompGlue : (j : I) → Path (Glue ℕ [ j ↦ pack ℕ (idEquiv ℕ) ]) (hcomp (λ l → []) (gl j)) (gl j)
+hcompGlue j = refl
+
+hcompGlueUng : (j : I) → ℕ
+hcompGlueUng j = unglue (hcomp (λ l → []) (gl j))
+
+-- R11: transp along a Glue line whose branch face does not name i. The
+-- face holds for all i where j holds, so transp_glue extends the fiber.
+transpGl : (j : I) → ℕ
+transpGl j = unglue (transp (λ i → Glue ℕ [ j ↦ pack ℕ (idEquiv ℕ) ]) i0 (gl j))
+
+transpGlIs : (j : I) → Path ℕ (transpGl j) 7
+transpGlIs j = refl

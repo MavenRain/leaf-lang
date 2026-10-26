@@ -1,0 +1,2 @@
+bad : (i : I) → ℕ
+bad i = hcomp (λ j → [ i ↦ 3 ]) 4

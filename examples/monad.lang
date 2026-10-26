@@ -1,4 +1,4 @@
--- Former F5: pure, map and bind over Option and Sum E.
+-- Former F5: pure, map and bind over Option. A Sum uses fold.
 lifted : Option ℕ
 lifted = map (λ (n : ℕ) → natAdd n 1) (some 4)
 
@@ -8,8 +8,11 @@ chained = bind (some 4) (λ (n : ℕ) → some (natMul n 2))
 wrapped : Option ℕ
 wrapped = pure 5
 
+three : Sum Bool ℕ
+three = inr Bool ℕ 3
+
 okRight : Sum Bool ℕ
-okRight = map (λ (n : ℕ) → natAdd n 1) (inr 3)
+okRight = fold (λ (e : Bool) → inl Bool ℕ e) (λ (n : ℕ) → inr Bool ℕ (natAdd n 1)) three
 
 okBind : Sum Bool ℕ
-okBind = bind (inr 3) (λ (n : ℕ) → inl false)
+okBind = fold (λ (e : Bool) → inl Bool ℕ e) (λ (n : ℕ) → inl Bool ℕ false) three

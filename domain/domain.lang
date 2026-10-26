@@ -22,6 +22,11 @@ data Tree : Type where
 data Lot (size : ℕ) : Type where
   makeLot : (lotPrice : ℕ) → Lot size
 
+-- A sum (S2-Q2 (b)): a CM with one generator for each type parameter.
+data Sum (A : Type 0) (B : Type 0) : Type where
+  inl : (inlOf : A) → Sum A B
+  inr : (inrOf : B) → Sum A B
+
 lineTotal : (item : Item) → ℕ
 lineTotal item = natMul (itemPrice item) (itemCount item)
 
@@ -30,3 +35,33 @@ isRed color = fold true false false color
 
 depth : (s : Stack) → ℕ
 depth s = fold 0 (λ (top : ℕ) (rest : ℕ) → natAdd rest 1) s
+
+-- Fin n (PLAN 2.2, S2 U7): the numbers below n, a Σ. lt k n is natLe on
+-- k + 1, so lt k 0 is false and Fin 0 has no element.
+lt : (k : ℕ) → (n : ℕ) → Bool
+lt k n = natLe (natAdd k 1) n
+
+Fin : (n : ℕ) → Type 0
+Fin n = (k : ℕ) × Path Bool (lt k n) true
+
+-- Equivalences (S2 U5b), from Π, Σ and Path only. Glue finds Equiv by
+-- name.
+isContr : (A : Type 0) → Type 0
+isContr A = (x : A) × ((y : A) → Path A x y)
+
+fiber : (A : Type 0) → (B : Type 0) → (f : A → B) → (y : B) → Type 0
+fiber A B f y = (x : A) × Path B (f x) y
+
+isEquiv : (A : Type 0) → (B : Type 0) → (f : A → B) → Type 0
+isEquiv A B f = (y : B) → isContr (fiber A B f y)
+
+Equiv : (A : Type 0) → (B : Type 0) → Type 0
+Equiv A B = (f : A → B) × isEquiv A B f
+
+-- The identity equivalence and univalence. ua A B e is the Glue line from
+-- A (through e at i0) to B (through idEquiv B at i1).
+idEquiv : (A : Type 0) → Equiv A A
+idEquiv A = pack (λ x → x) (λ y → pack (pack y refl) (λ z i → pack (payload z (~ i)) (λ j → payload z (~ i ∨ j))))
+
+ua : (A : Type 0) → (B : Type 0) → Equiv A B → Path (Type 0) A B
+ua A B e i = Glue B [ ~ i ↦ pack A e , i ↦ pack B (idEquiv B) ]

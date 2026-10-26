@@ -1,0 +1,2 @@
+bad : Path ℕ 0 1
+bad i = 0

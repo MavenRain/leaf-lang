@@ -1,0 +1,2 @@
+faceLambda : (i : I) → (p : Path ℕ 0 0) → Partial (~ i) (Path ℕ 0 0)
+faceLambda i p = [ ~ i ↦ λ j → p i ]

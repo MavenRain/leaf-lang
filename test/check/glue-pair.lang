@@ -1,0 +1,2 @@
+bad : (i : I) → Glue ((x : ℕ) × Bool) [ i ↦ pack ((x : ℕ) × Bool) (idEquiv ((x : ℕ) × Bool)) ]
+bad i = glue [ i ↦ pack 7 true ] (pack 8 true)

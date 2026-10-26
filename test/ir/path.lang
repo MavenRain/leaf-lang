@@ -1,0 +1,13 @@
+-- The check accepts this program, but the state of the fold holds a path
+-- value at run time. `langc ir` must refuse it with REFUSE_RUNTIME_PATH.
+p : Path ℕ 0 0
+p i = 0
+
+start : (k : ℕ) × Path ℕ 0 0
+start = pack 0 p
+
+step : (s : (k : ℕ) × Path ℕ 0 0) → (k : ℕ) × Path ℕ 0 0
+step s = pack (natAdd (witness s) 1) (payload s)
+
+bad : (n : ℕ) → ℕ
+bad n = witness (fold step start n)

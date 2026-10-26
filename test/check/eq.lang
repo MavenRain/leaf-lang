@@ -1,0 +1,3 @@
+-- S2 removed Eq. The check gives NAME_UNKNOWN and the hint "use Path A x y".
+same : Eq ℕ 0 0
+same = refl

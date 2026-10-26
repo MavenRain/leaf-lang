@@ -1,33 +1,33 @@
 -- Laws that the checker proves by normalization: each proof is refl.
 leftFour : Sum ℕ ℕ
-leftFour = inl 4
+leftFour = inl ℕ ℕ 4
 
 packed : ℕ × Bool
 packed = pack 3 true
 
-beta : Eq ℕ ((λ (n : ℕ) → natMul n n) 6) 36
+beta : Path ℕ ((λ (n : ℕ) → natMul n n) 6) 36
 beta = refl
 
-eta : Eq ((n : ℕ) → ℕ) (λ (n : ℕ) → natAdd n 1) (λ (m : ℕ) → natAdd m 1)
+eta : Path ((n : ℕ) → ℕ) (λ (n : ℕ) → natAdd n 1) (λ (m : ℕ) → natAdd m 1)
 eta = refl
 
-leftUnit : Eq (Option ℕ) (bind (pure 4) (λ (n : ℕ) → some (natAdd n 1))) (some 5)
+leftUnit : Path (Option ℕ) (bind (pure 4) (λ (n : ℕ) → some (natAdd n 1))) (some 5)
 leftUnit = refl
 
-rightUnit : Eq (Option ℕ) (bind (some 4) (λ (n : ℕ) → pure n)) (some 4)
+rightUnit : Path (Option ℕ) (bind (some 4) (λ (n : ℕ) → pure n)) (some 4)
 rightUnit = refl
 
-firstPair : Eq ℕ (witness packed) 3
+firstPair : Path ℕ (witness packed) 3
 firstPair = refl
 
-eitherLeft : Eq ℕ (either (λ (n : ℕ) → n) (λ (n : ℕ) → natAdd n 1) leftFour) 4
+eitherLeft : Path ℕ (fold (λ (n : ℕ) → n) (λ (n : ℕ) → natAdd n 1) leftFour) 4
 eitherLeft = refl
 
-subFloor : Eq ℕ (natSub 3 5) 0
+subFloor : Path ℕ (natSub 3 5) 0
 subFloor = refl
 
-flagTrue : Eq ℕ (flagIf (natLe 2 3) 1 0) 1
+flagTrue : Path ℕ (flagIf (natLe 2 3) 1 0) 1
 flagTrue = refl
 
-lotLaw : Eq ℕ (lotPrice (makeLot 3 250)) 250
+lotLaw : Path ℕ (lotPrice (makeLot 3 250)) 250
 lotLaw = refl
