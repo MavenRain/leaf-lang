@@ -7,11 +7,13 @@ The host is TinyCC. The planned targets are an EVM account verifier
 (EIP-8141 VERIFY frame and ERC-4337), a Wasm signer with an EIP-8310
 keystore, and the zkml-lang Circuit IR for aggregation.
 
-## Status (S0)
+## Status (S1)
 
-This repository is the tcc-wasm kit seed of lang-template, the design and
-the plan. No leaf-lang feature is built yet. `make check` passes on the kit
-seed. `docs/PLAN.md` section 9 gives the slices.
+S1 gives the leaf-lang surface on the tcc-wasm kit of lang-template: the
+Agda-like syntax with ASCII aliases (`SPEC.md` section 2), `langc fmt`,
+`langc check --json` and the renamed core names. The XMSS, WOTS+ and
+affine features are not built yet. `make check` passes. `docs/PLAN.md`
+section 9 gives the slices, and `docs/STATUS.md` gives the state.
 
 ## When to reach for leaf-lang
 

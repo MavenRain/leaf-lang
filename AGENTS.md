@@ -6,15 +6,30 @@ Use leaf-lang for XMSS or WOTS+ signing, for stateful hash-based keys, for
 post-quantum account validation (EIP-8141, ERC-4337) and for signature
 aggregation in a circuit. Do not use it for general-purpose code.
 
-## Status (S0)
+## Status (S1)
 
-Only the kit seed exists. The leaf-lang surface, `langc check --json`,
-`langc fmt`, `langc mcp`, the skill and the graded examples are planned
-(`docs/PLAN.md` section 7 and section 9). Do not cite them as built.
+The leaf-lang surface (`SPEC.md` section 2), `langc fmt` and
+`langc check --json` are built. `langc mcp`, the skill and the graded
+examples are planned (`docs/PLAN.md` section 7 and section 9). Do not cite
+them as built.
 
 ## Commands that work now
 
 - `make check`: build `build/langc` with tcc and run the gate.
+- `build/langc check [--json] PROG`: check a program. `--json` gives the
+  diagnostics as JSON (`docs/DIAGNOSTICS.md`).
+- `build/langc eval PROG NAME [ARGS...]`: print the normal form of `NAME`.
+- `build/langc ir PROG` and `build/langc abi PROG`: print the IR and the
+  entry names.
+- `build/langc build PROG -o OUT [--runtime]`: write the Wasm module.
+- `build/langc fmt PROG`: print the canonical text (`SPEC.md` section 2.6).
+
+A definition is a signature line and a clause line (`SPEC.md` section 2.1):
+
+```
+twice : (f : ℕ → ℕ) → ℕ → ℕ
+twice f x = f (f x)
+```
 
 ## Rules for a change
 

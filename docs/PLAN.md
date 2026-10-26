@@ -6,9 +6,9 @@ resource: the checker refuses a program that can use one leaf two times.
 The host is TinyCC. The targets are an EVM account verifier, a Wasm signer
 and the zkml-lang Circuit IR.
 
-S0 status: this repository is the tcc-wasm kit seed of lang-template plus
-the design (`design/DESIGN.md`) and this plan. No leaf-lang feature is
-built yet. Section 9 gives the slices.
+S1 status: the Agda-like surface, `langc fmt` and `langc check --json`
+are built on the tcc-wasm kit of lang-template. XMSS, WOTS+ and affine
+features are planned. Section 9 gives the slices.
 
 ## 1. Rulings and readings
 
@@ -35,15 +35,38 @@ USER rulings (2026-10-25, the request and AskUserQuestion; the words are in
   tweakable hash. The laws hold for every hash. v1 binds Keccak-256 on EVM
   and Wasm. A Poseidon2 binding comes in a later slice.
 
-Claude's readings (NOT ruled; section 11 gives each as a Q item with
-options, RECOMMENDED (a)):
+USER rulings on section 11 (2026-10-25, AskUserQuestion in the S1
+session):
+
+- Q14 = (b): the Agda-like Unicode surface (section 7.1 and SPEC.md
+  section 2). A named step is a top-level definition (signature and
+  clause).
+- Q1 = (a): the intent-lang ruled reading of R1 (section 2.1).
+- Q3 = (a): affine discipline. Multiplicities 0, 1 and omega on binders
+  (the QTT shape). 1 is affine: weakening is allowed, contraction is
+  refused. Only resource sorts (`Leaf`, `Keystore`) need it.
+- Q6 = (a): the v1 tweakable hash is `Keccak-256(seed || tweak || x)`, one
+  call per step, with own vectors and an independent cross-check.
+
+Not ruled. The plan takes (a) for each of these:
+
+- Q2 kit: (a) by default; the USER did not rule it.
+- Q4 keystore: (a) by default; the USER did not rule it.
+- Q5 commit-before-sign: (a) by default; the USER did not rule it.
+- Q7 v1 parameters: (a) by default; the USER did not rule it.
+- Q8 on-chain one-time: (a) by default; the USER did not rule it.
+- Q9 Wasm crypto: (a) by default; the USER did not rule it.
+- Q10 zkml field: (a) by default; the USER did not rule it.
+- Q11 proofs: (a) by default; the USER did not rule it.
+- Q12 two signers: (a) by default; the USER did not rule it.
+- Q13 token counts: (a) by default; the USER did not rule it.
+
+Claude's readings (NOT ruled; each is the (a) of a section 11 item, taken
+by default):
 
 - Kit: the seed is lang-template `hosts/tcc-wasm`. The signer is where the
   affine checker works. The EVM writer ports from `hosts/tcc-evm-contract`.
   The zkml writer ports from zkpolicy-lang (Q2).
-- Affine discipline: multiplicities 0, 1 and omega on binders (the QTT
-  shape). 1 is affine: weakening is allowed, contraction is refused. Only
-  resource sorts (`Leaf`, `Keystore`) need it (Q3).
 - Keystore: the dual of a cell monad, a stream of leaves, and affine. A
   copy of a keystore copies its leaves, so the EIP-8310 "silent reset of
   the signing position" becomes a type error in one program (Q4).
@@ -184,6 +207,10 @@ Readings:
 | general bytes, strings, `Int`, floats | `Digest` and `Nat` are enough |
 | `split` of a keystore (EIP-8310 reserved ranges) | no bullet needs two signers on one key; Q12, O5 |
 | kit names `Flag`, `Prod`, `List` (cons), `Eq`, `filter` | `Flag` becomes `Bool`; `Prod` is the ambient Sigma; cons is REFUSED (2.2); `Eq` becomes `Path`; `filter` has no use |
+
+The kit `Sum` former is not in the row above. It stays in S1. `Either` is
+not admitted (2.2). S2 drops or keeps `Sum` with the `REFUSE_CELL` review
+(O16).
 
 ## 4. The affine layer (B4)
 
@@ -357,7 +384,7 @@ slice and gate, or NOT DOING and the reason.
 
 | Brief bullet | Deliverable | Slice | Gate |
 |---|---|---|---|
-| 1. Canonical, constrained surface | one form per operation; verbose keywords; named steps `step NAME INTO`; `langc fmt` canonical printer; `W_NONCANON` with a fix for non-canonical input | S1 | `fmt` is idempotent and round-trips on each example; each example is canonical |
+| 1. Canonical, constrained surface | Agda-like Unicode grammar (Q14 (b), 7.1), one canonical form per operation; `langc fmt` canonical printer; `W_NONCANON` with a fix for non-canonical input (ASCII spellings included). A named step is a top-level definition (signature plus clause); there is no `step NAME INTO`. A `let` form is O15 (open) | S1 | `fmt` is idempotent and round-trips on each example and on `test/fmt/`; each example is canonical |
 | 1. Fast, structured feedback | `langc check --json`: `code`, `span`, `expected`, `found`, `fix`, `retry`; `docs/DIAGNOSTICS.md` | S1, S3 | each refusal code has a test that checks its JSON shape |
 | 1. LLM-friendly surface, mechanical backend (3 to 5 examples, instructions, MCP, validator in the loop) | `skills/leaf-lang/SKILL.md`, a grammar card, 5 graded examples, `AGENTS.md`, `langc mcp` | S9 | the MCP test drives `check` on each example by stdio |
 | 2. Denotation per program, machine-checkable | `langc check` discharges L1 to L7 for each program that uses them; `langc laws --json` | S4 to S7 | progress counts match the law table |
@@ -373,6 +400,26 @@ slice and gate, or NOT DOING and the reason.
 | 4. Small fine-tuned model (< 500 MB) | USER; the repo gives the corpus (`examples/`, the graded examples, the diagnostics) | | |
 | 4. Reference implementation, grammar and corpus, catalog listing | the repo, the grammar card, the corpus; the agentlanguages.dev listing is a USER step | S9 | |
 | Routing | `AGENTS.md` routing rule and the README table "When to reach for leaf-lang" | S0, S9 | |
+
+### 7.1 Surface spellings (Q14 (b))
+
+The plan text keeps the design names (`Nat`, `->`, `-o`, `*`). This table
+maps them to the surface of SPEC.md section 2.3. The parser reads each
+ASCII alias; `langc check` gives `W_NONCANON` with the canonical text as
+`fix` (O14); `langc fmt` prints only the canonical spelling.
+
+| Design name | Canonical spelling | ASCII alias |
+|---|---|---|
+| Pi `(x : A) -> B`, `A -> B` | `(x : A) → B`, `A → B` | `->` for `→` |
+| Lambda | `λ x → t`, `λ (x : A) → t` | `\` for `λ`; `fun x => t` |
+| Sigma `(x : A) * B`, `A * B` | `(x : A) × B`, `A × B` | `*` for `×`; `Sigma (x : A) B` |
+| `Nat` | `ℕ` | `Nat` |
+| Universe `Type n` | `Type n` | none |
+| `-o` (S3), `Path` (S2) | not in S1 | not in S1 |
+
+The core names do not change: `ℕ` and `Nat` give the one core name `Nat`.
+SPEC.md section 2.1 gives the declaration forms (signature and clause,
+`rec`, `postulate`, `data ... where`) and the forms that `check` refuses.
 
 ## 8. Port sources (pinned 2026-10-25)
 
@@ -396,7 +443,7 @@ on the new checks, docs, close (stage, commit message, next prompt).
 | Slice | Scope | Gate and mutants |
 |---|---|---|
 | S0 | kit seed, `design/DESIGN.md`, this plan, README, `AGENTS.md` | `make check` EXIT 0: 13 Wasm modules valid, differential 813 cases 0 mismatches, gate 0 failures, review and domain regressions passed |
-| S1 | surface: verbose keywords, `step NAME INTO`, `langc fmt`, `W_NONCANON`; `check --json` with progress counts; drop the refused kit names | round trip and idempotence on the examples; JSON shape per code; mutants on `fmt` |
+| S1 | surface: Agda-like Unicode (Q14 (b), 7.1), named steps as top-level definitions, `langc fmt`, `W_NONCANON`; `check --json` with progress counts; drop the refused kit names | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 9; check refusals 18; evals 30; ir 10 lowered; wasm 13 modules valid; differential 772 cases, 0 mismatches; fmt 50 canonical, 3 non-canonical pairs (round trip and idempotence); json 20 fixtures, diagnostics 31 codes (18 with a fixture, 13 with no fixture); gate 0 failures; review and domain regressions passed; mutants M1 to M6 killed (docs/STATUS.md, S1) |
 | S2 | kernel port: Path, Sigma, Pi, U, `I`, `transp`, `hcomp`, records, `REFUSE_CELL`, cofamily, `Fin` | port tests; `REFUSE_CELL` mutants |
 | S3 | affine layer: multiplicities, `-o`, resource sorts, sealed `Leaf` and `Keystore`, `Durable`, the five refusal codes | one test per code; mutants on each refusal |
 | S4 | `Digest`, hash ops (opaque), WOTS+, L-tree, Merkle, `sign`, `verify`; reference Keccak in `langc eval`; L1, L6 | own vectors plus a cross-check with an independent implementation; L1 at h = 4 |
@@ -430,43 +477,63 @@ on the new checks, docs, close (stage, commit message, next prompt).
 - O12: reuse across runs (a restored backup) is outside the checker
   (section 4.5).
 - O13: seed entropy comes from the host.
+- O14 (Claude reading, not ruled): an ASCII alias parses and gives
+  `W_NONCANON` with the Unicode form as `fix`; `fmt` prints only the
+  Unicode form. Unicode can cost more tokens; the S9 baseline (Q13)
+  measures it.
+- O15: a `let` form under Q14 (b). Open.
+- O16: the kit `Sum` former stays in S1. `Either` is not admitted (2.2).
+  S2 drops or keeps `Sum` with the `REFUSE_CELL` review.
+- O17: `flagIf` keeps its kit name (it is not in the S1 drop list). The
+  USER rules the name of `if`.
+- O18: dead core paths. The Op values and the eval and lowering code for
+  `List`, `Prod`, `filter` and `unfold` stay, but no program reaches them.
+  S2 removes them.
+- O19: the value printer and some check messages use the ASCII kit
+  spelling (`->`, `fun x =>`, `Sigma (x : A) B`, `Nat`). The parser reads
+  it back through the aliases.
 
 ## 11. Questions for the USER
 
-Each item has options. (a) is RECOMMENDED.
+Each item has options. (a) is RECOMMENDED. Marks (2026-10-25): RULED
+(letter) is a USER ruling; DEFAULT (a) means (a) by default, the USER did
+not rule it (section 1).
 
-- Q1 R1 reading. (a) the intent-lang ruled reading (2.1): ambient Pi,
-  Sigma, Path, U, Glue are not limited; declared type constructors are
-  only CM and CC; the cell criterion is syntactic; cons is refused.
-  (b) the same without Glue and `ua`.
-- Q2 kit. (a) tcc-wasm seed; EVM writer from tcc-evm-contract; zkml writer
-  from zkpolicy-lang. (b) tcc-evm seed and a Wasm port.
-- Q3 affine discipline. (a) QTT multiplicities 0, 1, omega; affine
-  (weakening allowed); resource sorts `Leaf` and `Keystore` only.
+- Q1 R1 reading. RULED (a). (a) the intent-lang ruled reading (2.1):
+  ambient Pi, Sigma, Path, U, Glue are not limited; declared type
+  constructors are only CM and CC; the cell criterion is syntactic; cons
+  is refused. (b) the same without Glue and `ua`.
+- Q2 kit. DEFAULT (a). (a) tcc-wasm seed; EVM writer from
+  tcc-evm-contract; zkml writer from zkpolicy-lang. (b) tcc-evm seed and a
+  Wasm port.
+- Q3 affine discipline. RULED (a). (a) QTT multiplicities 0, 1, omega;
+  affine (weakening allowed); resource sorts `Leaf` and `Keystore` only.
   (b) linear: a leaf must be used or burned on purpose. (c) uniqueness
   types.
-- Q4 keystore. (a) the reading `Stream (Option Leaf)`, a cocell comonad,
-  affine, with `next` in `Durable`. (b) an opaque base type with `next`, no
-  comonad reading.
-- Q5 commit-before-sign. (a) by data dependency: the leaf comes out of the
-  continuation of `commit`. (b) a law checked on traces, with a free
-  `sign`.
-- Q6 v1 tweakable hash. (a) `Keccak-256(seed || tweak || x)`, one call per
-  step; own vectors and an independent cross-check. (b) the RFC 8391
-  bitmask construction with Keccak, three calls per step. (c) RFC 8391
-  with SHA-256 exactly (official vectors; outside R5).
-- Q7 v1 parameters. (a) n = 32, w = 16, h a parameter; gate at h = 4 and
-  10; account default h = 16. (b) h = 10 fixed. (c) h = 20.
-- Q8 on-chain one-time. (a) leaf index = account nonce. (b) a used-leaf
-  bitmap in storage (ERC-4337 only; a VERIFY frame cannot write).
-- Q9 Wasm crypto. (a) Keccak in the module; `commit` is the one host
-  import. (b) a host-import crypto ABI.
-- Q10 zkml field. (a) Poseidon2 over BabyBear (zkml-lang has it).
-  (b) add KoalaBear to zkml-lang first (leanSig parameters).
-- Q11 proofs. (a) guest only; no Lean export. (b) a Lean export in a later
-  slice.
-- Q12 two signers. (a) not in v1 (O5). (b) admit an affine `split` in S5.
-- Q13 token counts. (a) a fixed offline proxy. (b) API counts (USER
-  refresh).
-- Q14 surface. (a) ASCII verbose keywords with `step NAME INTO`.
-  (b) Agda-like Unicode.
+- Q4 keystore. DEFAULT (a). (a) the reading `Stream (Option Leaf)`, a
+  cocell comonad, affine, with `next` in `Durable`. (b) an opaque base
+  type with `next`, no comonad reading.
+- Q5 commit-before-sign. DEFAULT (a). (a) by data dependency: the leaf
+  comes out of the continuation of `commit`. (b) a law checked on traces,
+  with a free `sign`.
+- Q6 v1 tweakable hash. RULED (a). (a) `Keccak-256(seed || tweak || x)`,
+  one call per step; own vectors and an independent cross-check. (b) the
+  RFC 8391 bitmask construction with Keccak, three calls per step.
+  (c) RFC 8391 with SHA-256 exactly (official vectors; outside R5).
+- Q7 v1 parameters. DEFAULT (a). (a) n = 32, w = 16, h a parameter; gate
+  at h = 4 and 10; account default h = 16. (b) h = 10 fixed. (c) h = 20.
+- Q8 on-chain one-time. DEFAULT (a). (a) leaf index = account nonce.
+  (b) a used-leaf bitmap in storage (ERC-4337 only; a VERIFY frame cannot
+  write).
+- Q9 Wasm crypto. DEFAULT (a). (a) Keccak in the module; `commit` is the
+  one host import. (b) a host-import crypto ABI.
+- Q10 zkml field. DEFAULT (a). (a) Poseidon2 over BabyBear (zkml-lang has
+  it). (b) add KoalaBear to zkml-lang first (leanSig parameters).
+- Q11 proofs. DEFAULT (a). (a) guest only; no Lean export. (b) a Lean
+  export in a later slice.
+- Q12 two signers. DEFAULT (a). (a) not in v1 (O5). (b) admit an affine
+  `split` in S5.
+- Q13 token counts. DEFAULT (a). (a) a fixed offline proxy. (b) API
+  counts (USER refresh).
+- Q14 surface. RULED (b). (a) ASCII verbose keywords with
+  `step NAME INTO`. (b) Agda-like Unicode (section 7.1).
