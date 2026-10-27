@@ -5,6 +5,7 @@
 #define SYM_ARROW "\xE2\x86\x92"  /* → */
 #define SYM_LAMBDA "\xCE\xBB"     /* λ */
 #define SYM_TIMES "\xC3\x97"      /* × */
+#define SYM_LOLLI "\xE2\x8A\xB8"  /* ⊸ */
 #define SYM_NAT "\xE2\x84\x95"    /* ℕ */
 #define SYM_MEET "\xE2\x88\xA7"   /* ∧ */
 #define SYM_JOIN "\xE2\x88\xA8"   /* ∨ */
@@ -104,9 +105,20 @@ static int term_level(const Term *t) {
 
 static void put_term(FmtText *out, const Term *t, int level);
 
-/* `(x : A)` */
-static void put_group(FmtText *out, const char *name, const Term *type) {
+/* The binder mark and its space; a binder with no mark is omega. */
+static const char *mult_mark(Mult mult) {
+  switch (mult) {
+    case MULT_OMEGA: return "";
+    case MULT_ZERO: return "@0 ";
+    case MULT_ONE: return "@1 ";
+  }
+  return "";
+}
+
+/* `(x : A)`, or `(@0 x : A)` and `(@1 x : A)` for a marked binder. */
+static void put_group(FmtText *out, Mult mult, const char *name, const Term *type) {
   put_str(out, "(");
+  put_str(out, mult_mark(mult));
   put_str(out, name);
   put_str(out, " : ");
   put_term(out, type, LEVEL_BINDER);
@@ -119,7 +131,7 @@ static void put_lambda(FmtText *out, const Term *t) {
   for (; t->kind == TERM_LAM; t = t->right) {
     put_str(out, " ");
     if (t->left == NULL) put_str(out, t->name);
-    else put_group(out, t->name, t->left);
+    else put_group(out, t->mult, t->name, t->left);
   }
   put_str(out, " " SYM_ARROW " ");
   put_term(out, t, LEVEL_BINDER);
@@ -127,7 +139,7 @@ static void put_lambda(FmtText *out, const Term *t) {
 
 /* Pi and Sigma. A named binder is a group and is never merged. */
 static void put_binary(FmtText *out, const Term *t, const char *op, int left_level, int right_level) {
-  if (t->name != NULL) put_group(out, t->name, t->left);
+  if (t->name != NULL) put_group(out, t->mult, t->name, t->left);
   else put_term(out, t->left, left_level);
   put_str(out, op);
   put_term(out, t->right, right_level);
@@ -185,7 +197,9 @@ static void put_term(FmtText *out, const Term *t, int level) {
       put_lambda(out, t);
       break;
     case TERM_PI:
-      put_binary(out, t, " " SYM_ARROW " ", LEVEL_SIGMA, LEVEL_BINDER);
+      /* `A ⊸ B` is the Pi at one with no binder name. */
+      put_binary(out, t, t->name == NULL && t->mult == MULT_ONE ? " " SYM_LOLLI " " : " " SYM_ARROW " ", LEVEL_SIGMA,
+                 LEVEL_BINDER);
       break;
     case TERM_SIGMA:
       put_binary(out, t, " " SYM_TIMES " ", LEVEL_JOIN, LEVEL_SIGMA);
@@ -218,7 +232,7 @@ static void put_ctor(FmtText *out, const Decl *d, const Ctor *c) {
   put_str(out, c->name);
   put_str(out, " : ");
   for (size_t i = 0; i < c->field_count; i++) {
-    put_group(out, c->fields[i].name, c->fields[i].type);
+    put_group(out, MULT_OMEGA, c->fields[i].name, c->fields[i].type);
     put_str(out, " " SYM_ARROW " ");
   }
   put_str(out, d->name);
@@ -249,7 +263,7 @@ static void put_data(FmtText *out, const Decl *d) {
   put_str(out, d->name);
   for (size_t i = 0; i < d->param_count; i++) {
     put_str(out, " ");
-    put_group(out, d->params[i].name, d->params[i].type);
+    put_group(out, MULT_OMEGA, d->params[i].name, d->params[i].type);
   }
   put_str(out, " : Type where");
   for (size_t i = 0; i < d->ctor_count; i++) {

@@ -8,3 +8,5 @@ fun-no-binder.lang PARSE_EXPECT
 type-no-level.lang PARSE_EXPECT
 deep.lang PARSE_DEPTH
 tilde-app.lang PARSE_EXPECT
+affine-alias-ident.lang LEX_CHAR
+mark-range.lang LEX_CHAR

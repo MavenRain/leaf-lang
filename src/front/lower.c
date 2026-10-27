@@ -636,6 +636,7 @@ static int lower_canon(Low *l, Buf *b, const Value *v, Operand *out) {
   case OP_NAT:
   case OP_BOOL:
   case OP_UNIT:
+  case OP_LEAF:
   case OP_OPTION:
   case OP_FAMILY:
   case OP_UNIT_VAL:
@@ -990,6 +991,7 @@ static int lower_stuck(Low *l, Buf *b, const Value *v, Operand *out) {
   case OP_NAT:
   case OP_BOOL:
   case OP_UNIT:
+  case OP_LEAF:
   case OP_OPTION:
   case OP_FAMILY:
   case OP_UNIT_VAL:

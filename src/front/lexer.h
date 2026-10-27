@@ -17,6 +17,8 @@ typedef enum {
   TOK_FATARROW, /* => (the `fun` alias only) */
   TOK_TIMES,    /* × or the alias * */
   TOK_LAMBDA,   /* λ or the alias \ */
+  TOK_LOLLI,    /* ⊸ or the alias -o (S3) */
+  TOK_MARK,     /* @0 or @1; `nat` is 0 or 1 (S3) */
   TOK_KW_REC,
   TOK_KW_FUN,   /* the alias of λ */
   TOK_KW_DATA,

@@ -1,0 +1,27 @@
+-- Multiplicity marks and the affine arrow: @0, @1, ⊸ and the alias -o.
+consume : ℕ ⊸ ℕ
+consume x = x
+
+first : ℕ ⊸ ℕ ⊸ ℕ
+first a b = a
+
+keepOne : (@1 x : ℕ) → (@0 y : ℕ) → ℕ
+keepOne x y = x
+
+shared : (@1 a : ℕ) → (@1 b : ℕ) → ℕ ⊸ ℕ
+shared a b c = c
+
+once : ℕ ⊸ ℕ
+once = λ (@1 n : ℕ) → n
+
+pick : ℕ → ℕ ⊸ ℕ
+pick x = λ (@1 y : ℕ) → y
+
+drop : (@0 n : ℕ) → ℕ → ℕ
+drop = λ (@0 n : ℕ) m → m
+
+marked : (@1 n : ℕ) × ℕ
+marked = pack 1 2
+
+apply : (ℕ ⊸ ℕ) → ℕ
+apply g = g 1

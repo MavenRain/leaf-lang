@@ -9,7 +9,7 @@
 #define VARIES 0xffu
 
 static const char *const OP_NAMES[] = {
-  [OP_NAT] = "Nat", [OP_BOOL] = "Bool", [OP_UNIT] = "Unit",
+  [OP_NAT] = "Nat", [OP_BOOL] = "Bool", [OP_UNIT] = "Unit", [OP_LEAF] = "Leaf",
   [OP_OPTION] = "Option", [OP_FAMILY] = "?",
   [OP_UNIT_VAL] = "unit", [OP_TRUE] = "true", [OP_FALSE] = "false",
   [OP_NONE] = "none", [OP_SOME] = "some",
@@ -166,7 +166,7 @@ static const Value *flag(Machine *m, int yes) {
   return constant(m, yes ? OP_TRUE : OP_FALSE);
 }
 
-const Value *val_arrow(Machine *m, const Value *dom, const Value *cod) {
+const Value *val_arrow_mult(Machine *m, Mult mult, const Value *dom, const Value *cod) {
   Value *v;
   if (dom == NULL || cod == NULL)
     return NULL;
@@ -175,10 +175,15 @@ const Value *val_arrow(Machine *m, const Value *dom, const Value *cod) {
     return NULL;
   v->dom = dom;
   v->arg = cod;
+  v->mult = mult;
   return v;
 }
 
-const Value *val_closure(Machine *m, ValKind kind, const char *name, const Value *dom, const Env *env, const Core *body) {
+const Value *val_arrow(Machine *m, const Value *dom, const Value *cod) {
+  return val_arrow_mult(m, MULT_OMEGA, dom, cod);
+}
+
+const Value *val_binder(Machine *m, ValKind kind, Mult mult, const char *name, const Value *dom, const Env *env, const Core *body) {
   Value *v;
   if (body == NULL || (dom == NULL && kind != VAL_LAM))
     return NULL;
@@ -186,10 +191,28 @@ const Value *val_closure(Machine *m, ValKind kind, const char *name, const Value
   if (v == NULL)
     return NULL;
   v->name = name;
+  v->mult = mult;
   v->dom = dom;
   v->env = env;
   v->body = body;
   return v;
+}
+
+const Value *val_closure(Machine *m, ValKind kind, const char *name, const Value *dom, const Env *env, const Core *body) {
+  return val_binder(m, kind, MULT_OMEGA, name, dom, env, body);
+}
+
+/* The binder mark of the printer: the same rule as fmt (Q-S3-1 (a)). */
+static const char *mult_mark(Mult mult) {
+  switch (mult) {
+  case MULT_OMEGA:
+    return "";
+  case MULT_ZERO:
+    return "@0 ";
+  case MULT_ONE:
+    return "@1 ";
+  }
+  return "";
 }
 
 int val_is(const Value *v, Op op) {
@@ -1143,6 +1166,7 @@ static const Value *transp_ctor(Machine *m, const Value *const *a, uint32_t n) {
   case OP_NAT:
   case OP_BOOL:
   case OP_UNIT:
+  case OP_LEAF:
   case OP_OPTION:
   case OP_FAMILY:
   case OP_UNIT_VAL:
@@ -1535,6 +1559,7 @@ static const Value *transp_op(Machine *m, const Value *h, const Value *const *a,
   case OP_NAT:
   case OP_BOOL:
   case OP_UNIT:
+  case OP_LEAF:
     return a[2];
   case OP_OPTION:
   case OP_FAMILY:
@@ -1786,6 +1811,7 @@ static const Value *hcomp_op(Machine *m, const Value *const *a, uint32_t n) {
   case OP_NAT:
   case OP_BOOL:
   case OP_UNIT:
+  case OP_LEAF:
   case OP_OPTION:
   case OP_FAMILY:
     return hcomp_data(m, a, n);
@@ -2074,6 +2100,7 @@ static const Value *reduce_op(Machine *m, Op op, uint32_t inst, uint32_t field, 
   case OP_NAT:
   case OP_BOOL:
   case OP_UNIT:
+  case OP_LEAF:
   case OP_OPTION:
   case OP_FAMILY:
   case OP_UNIT_VAL:
@@ -2177,11 +2204,11 @@ static const Value *eval_inner(Machine *m, const Env *env, const Core *c) {
   case CORE_UNIV:
     return val_univ(m, c->nat);
   case CORE_LAM:
-    return val_closure(m, VAL_LAM, c->name, NULL, env, c->b);
+    return val_binder(m, VAL_LAM, c->mult, c->name, NULL, env, c->b);
   case CORE_PI:
-    return val_closure(m, VAL_PI, c->name, eval_core(m, env, c->a), env, c->b);
+    return val_binder(m, VAL_PI, c->mult, c->name, eval_core(m, env, c->a), env, c->b);
   case CORE_SIGMA:
-    return val_closure(m, VAL_SIGMA, c->name, eval_core(m, env, c->a), env, c->b);
+    return val_binder(m, VAL_SIGMA, c->mult, c->name, eval_core(m, env, c->a), env, c->b);
   case CORE_APP:
     return apply_value(m, eval_core(m, env, c->a), eval_core(m, env, c->b));
   case CORE_OP:
@@ -2298,7 +2325,7 @@ static int conv_loop(Machine *m, uint32_t level, const Value *a, const Value *b)
       return 0;
     case VAL_PI:
     case VAL_SIGMA:
-      return conv_binder(m, level, a, b);
+      return a->mult == b->mult && conv_binder(m, level, a, b); /* Q-S3-3 (a): no subsumption */
     case VAL_APP:
       if (!conv_values(m, level, a->dom, b->dom))
         return 0;
@@ -2384,6 +2411,7 @@ static const Core *quote_binder(Machine *m, uint32_t level, const Value *v, Core
   if (c == NULL)
     return NULL;
   c->name = v->name;
+  c->mult = v->mult;
   c->a = dom;
   c->b = body;
   return c;
@@ -2551,19 +2579,21 @@ static void print_binder(Printer *p, const Value *v) {
     put(p, " => ");
     break;
   case VAL_PI:
-    if (v->name == NULL) {
+    if (v->name == NULL && v->mult != MULT_ZERO) {
       print_value(p, v->dom, binder_dom);
-      put(p, " -> ");
+      put(p, v->mult == MULT_ONE ? " -o " : " -> ");
       break;
     }
     put(p, "(");
-    put(p, name);
+    put(p, mult_mark(v->mult));
+    put(p, v->name == NULL ? "_" : name);
     put(p, " : ");
     print_value(p, v->dom, 0);
     put(p, ") -> ");
     break;
   case VAL_SIGMA:
     put(p, "Sigma (");
+    put(p, mult_mark(v->mult));
     put(p, name);
     put(p, " : ");
     print_value(p, v->dom, 0);

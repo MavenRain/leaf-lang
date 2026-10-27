@@ -24,14 +24,16 @@ struct Scope {
   const char *name; /* NULL for the binder of `A -> B` */
   const Value *type;
   uint32_t level;
-  const Scope *next;
+  Mult mult;     /* the binder multiplicity (PLAN 4.1) */
+  uint32_t uses; /* the uses so far, each one scaled by the level */
+  Scope *next;
 };
 
 typedef struct {
   Machine *m;
   const DeclList *decls;
   size_t decl_index;
-  const Scope *scope; /* the innermost binder first */
+  Scope *scope;       /* the innermost binder first */
   const Env *env;     /* a variable for each binder */
   uint32_t level;     /* the number of binders */
   unsigned depth;
@@ -39,7 +41,12 @@ typedef struct {
   uint32_t self;      /* the family whose fields are checked, or NO_FAMILY */
   uint32_t self_uses; /* the uses of that family in the current field */
   const Value *face;  /* the faces of the enclosing system cells, or NULL */
+  Mult at;            /* the level of the current term: 0 in a type position, else 1 (PLAN 4.1) */
 } Checker;
+
+static int resource_type(Checker *c, const Value *v);
+static int copyable_type(Checker *c, const Value *v);
+static int pos_family(const Checker *c, const Value *v);
 
 typedef enum {
   RULE_TYPE0,
@@ -50,6 +57,7 @@ typedef enum {
   RULE_PACK,
   RULE_REFL,
   RULE_SIGMA_PART,
+  RULE_UNPACK,
   RULE_OPTION,
   RULE_PURE,
   RULE_MAP,
@@ -85,6 +93,7 @@ static const Builtin BUILTINS[] = {
   {"Nat", 0, RULE_TYPE0, OP_NAT, OP_NAT, 0},
   {"Bool", 0, RULE_TYPE0, OP_BOOL, OP_NAT, 0},
   {"Unit", 0, RULE_TYPE0, OP_UNIT, OP_NAT, 0},
+  {"Leaf", 0, RULE_TYPE0, OP_LEAF, OP_NAT, 0},
   {"Option", 1, RULE_TYPE1, OP_OPTION, OP_NAT, 0},
   {"I", 0, RULE_VALUE0, OP_I, OP_SSET, 0},
   {"i0", 0, RULE_VALUE0, OP_I0, OP_I, 0},
@@ -115,6 +124,7 @@ static const Builtin BUILTINS[] = {
   {"refl", 0, RULE_REFL, OP_PLAM, OP_PATHP, 0},
   {"witness", 1, RULE_SIGMA_PART, OP_WITNESS, OP_NAT, 0},
   {"payload", 1, RULE_SIGMA_PART, OP_PAYLOAD, OP_NAT, 1},
+  {"unpack", 2, RULE_UNPACK, OP_NAT, OP_NAT, 0},
   {"option", 3, RULE_OPTION, OP_OPTION_ELIM, OP_OPTION, 0},
   {"pure", 1, RULE_PURE, OP_PURE, OP_NAT, 0},
   {"map", 2, RULE_MAP, OP_MAP, OP_NAT, 0},
@@ -193,7 +203,7 @@ static const Core *core_leaf(Checker *c, CoreKind kind, uint64_t nat) {
   return k;
 }
 
-static const Core *core_bind(Checker *c, CoreKind kind, const char *name, const Core *a, const Core *b) {
+static const Core *core_binder(Checker *c, CoreKind kind, Mult mult, const char *name, const Core *a, const Core *b) {
   Core *k;
   if (b == NULL || (a == NULL && kind != CORE_LAM))
     return NULL;
@@ -201,9 +211,14 @@ static const Core *core_bind(Checker *c, CoreKind kind, const char *name, const 
   if (k == NULL)
     return NULL;
   k->name = name;
+  k->mult = mult;
   k->a = a;
   k->b = b;
   return k;
+}
+
+static const Core *core_bind(Checker *c, CoreKind kind, const char *name, const Core *a, const Core *b) {
+  return core_binder(c, kind, MULT_OMEGA, name, a, b);
 }
 
 static const Core *core_app(Checker *c, const Core *f, const Core *x) {
@@ -303,7 +318,7 @@ static const char *show(Checker *c, const Value *v) {
   return buf;
 }
 
-static int push(Checker *c, const char *name, const Value *type) {
+static int push_at(Checker *c, Mult mult, const char *name, const Value *type) {
   Scope *s = arena_alloc(c->m->arena, sizeof *s);
   const Env *e = env_push(c->m, c->env, val_var(c->m, c->level));
   if (type == NULL || s == NULL || e == NULL)
@@ -311,11 +326,18 @@ static int push(Checker *c, const char *name, const Value *type) {
   s->name = name;
   s->type = type;
   s->level = c->level;
+  s->mult = mult;
+  s->uses = 0;
   s->next = c->scope;
   c->scope = s;
   c->env = e;
   c->level++;
   return 1;
+}
+
+/* A binder at omega. */
+static int push(Checker *c, const char *name, const Value *type) {
+  return push_at(c, MULT_OMEGA, name, type);
 }
 
 static void pop(Checker *c) {
@@ -337,13 +359,120 @@ static int expect(Checker *c, const Value *found, const Value *want) {
   return FAIL(c, "TYPE_MISMATCH", "expected a term of type %s, found a term of type %s", show(c, want), show(c, found));
 }
 
-static const Scope *find_local(const Checker *c, const char *name) {
-  const Scope *s;
+static Scope *find_local(const Checker *c, const char *name) {
+  Scope *s;
   for (s = c->scope; s != NULL; s = s->next) {
     if (s->name != NULL && strcmp(s->name, name) == 0)
       return s;
   }
   return NULL;
+}
+
+/* The uses that the multiplicity M allows; omega has no limit. */
+static uint32_t mult_bound(Mult m) {
+  switch (m) {
+  case MULT_ZERO:
+    return 0u;
+  case MULT_ONE:
+    return 1u;
+  case MULT_OMEGA:
+    return UINT32_MAX;
+  }
+  return UINT32_MAX;
+}
+
+/* The level of an argument at a binder of multiplicity M, in an
+   application at the level AT (QTT scaling): 0 gives 0, 1 gives AT, and
+   omega gives omega (0 when AT is 0). */
+static Mult mult_scale(Mult at, Mult m) {
+  switch (m) {
+  case MULT_ZERO:
+    return MULT_ZERO;
+  case MULT_ONE:
+    return at;
+  case MULT_OMEGA:
+    return at == MULT_ZERO ? MULT_ZERO : MULT_OMEGA;
+  }
+  return at;
+}
+
+/* A use of S at the level c->at (PLAN 4.1). A 1-variable used at omega is
+   REFUSE_AFFINE_OMEGA. Another use above the multiplicity of S is
+   REFUSE_AFFINE_REUSE: a 1-variable used two times, or a 0-variable at run
+   time (Q-S3-4 (a)). */
+static int use_local(Checker *c, Scope *s) {
+  uint32_t add = mult_bound(c->at);
+  uint32_t bound = mult_bound(s->mult);
+  s->uses = add > UINT32_MAX - s->uses ? UINT32_MAX : s->uses + add;
+  if (s->uses <= bound)
+    return 1;
+  if (c->at == MULT_OMEGA && s->mult == MULT_ONE)
+    return FAIL(c, "REFUSE_AFFINE_OMEGA", "the variable %s is used at omega, allowed 1: an argument at an omega binder, or a closure that captures it and goes to one, can run more than one time (PLAN 4.1)", s->name);
+  if (c->at == MULT_OMEGA)
+    return FAIL(c, "REFUSE_AFFINE_REUSE", "the variable %s is used more times than its multiplicity allows on one evaluation path: used at omega, allowed %u (PLAN 4.1)", s->name, bound);
+  return FAIL(c, "REFUSE_AFFINE_REUSE", "the variable %s is used more times than its multiplicity allows on one evaluation path: used %u, allowed %u (PLAN 4.1)", s->name, s->uses, bound);
+}
+
+/* The use counts of the scope, the innermost binder first. A probe that
+   fails, or whose term is checked again, restores them. */
+static uint32_t *uses_save(Checker *c) {
+  uint32_t *saved = arena_alloc(c->m->arena, ((size_t)c->level + 1u) * sizeof *saved);
+  const Scope *s;
+  uint32_t i = 0;
+  for (s = c->scope; s != NULL && saved != NULL; s = s->next)
+    saved[i++] = s->uses;
+  return saved;
+}
+
+static void uses_restore(Checker *c, const uint32_t *saved) {
+  Scope *s;
+  uint32_t i = 0;
+  for (s = c->scope; s != NULL && saved != NULL; s = s->next)
+    s->uses = saved[i++];
+}
+
+/* The arms of an eliminator start from the same counts, and after them each
+   count is the maximum over the arms (PLAN 4.1). MOST holds the counts of
+   the arms before the current one. */
+static void uses_max(Checker *c, const uint32_t *most) {
+  Scope *s;
+  uint32_t i = 0;
+  for (s = c->scope; s != NULL && most != NULL; s = s->next, i++)
+    s->uses = most[i] > s->uses ? most[i] : s->uses;
+}
+
+/* A closure at omega can run more than one time (PLAN 4.1). Its body counts
+   at 1 for one call; then each variable that it captures (its count is not
+   the count in SAVED) is used at omega. c->at is MULT_OMEGA. */
+static int uses_omega(Checker *c, const uint32_t *saved) {
+  Scope *s;
+  uint32_t i = 0;
+  int ok = 1;
+  for (s = c->scope; s != NULL && saved != NULL && ok; s = s->next, i++) {
+    if (s->uses != saved[i]) {
+      s->uses = saved[i];
+      ok = use_local(c, s);
+    }
+  }
+  return ok;
+}
+
+#define FIX_WHY "is used by a fold step or a recursive case, which runs one time for each layer: used at omega"
+#define PATH_WHY "is free under an interval binder at 1 (λ i →, refl, symm, trans, cong, transport, transp, hcomp, Glue, glue or unglue): both end points of the path hold it, used 2"
+
+/* A term that runs one time for each layer (a fold step, the case of a
+   constructor with a recursive field: REFUSE_AFFINE_FIX), or a path whose
+   end points both hold its body (REFUSE_AFFINE_PATH), refuses each
+   1-variable that it uses: its count is not the count in SAVED (PLAN
+   4.2). */
+static int uses_refuse(Checker *c, const uint32_t *saved, const char *code, const char *why) {
+  const Scope *s;
+  uint32_t i = 0;
+  for (s = c->scope; s != NULL && saved != NULL; s = s->next, i++) {
+    if (s->uses != saved[i] && s->mult == MULT_ONE)
+      return FAIL(c, code, "the variable %s %s, allowed 1 (PLAN 4.2)", s->name, why);
+  }
+  return 1;
 }
 
 static uint32_t find_def(const Machine *m, const char *name) {
@@ -369,7 +498,13 @@ static const Core *check_lam(Checker *c, const Term *t, const Value *hint, const
 
 static const Core *check(Checker *c, const Term *t, const Value *want) {
   const Value *type = NULL;
-  return want == NULL ? NULL : elab(c, t, want, &type);
+  Mult at = c->at;
+  const Core *k;
+  if (want != NULL && want->kind == VAL_UNIV)
+    c->at = MULT_ZERO;
+  k = want == NULL ? NULL : elab(c, t, want, &type);
+  c->at = at;
+  return k;
 }
 
 static const Core *infer(Checker *c, const Term *t, const Value **type) {
@@ -380,9 +515,22 @@ static const Core *infer(Checker *c, const Term *t, const Value **type) {
 /* infer, but a failure leaves no diagnostic. */
 static const Core *try_infer(Checker *c, const Term *t, const Value **type) {
   Diag saved = *c->m->diag;
+  uint32_t *uses = uses_save(c);
   const Core *k = infer(c, t, type);
-  if (k == NULL)
+  if (k == NULL) {
     *c->m->diag = saved;
+    uses_restore(c, uses);
+  }
+  return k;
+}
+
+/* check at the level AT: 0 in a type position, else 1 (PLAN 4.1). */
+static const Core *check_at(Checker *c, Mult at, const Term *t, const Value *want) {
+  Mult saved = c->at;
+  const Core *k;
+  c->at = at;
+  k = check(c, t, want);
+  c->at = saved;
   return k;
 }
 
@@ -390,7 +538,11 @@ static const Core *try_infer(Checker *c, const Term *t, const Value **type) {
    I, or a function type over I) is also a type and *LEVEL is UINT64_MAX. */
 static const Core *check_type_at(Checker *c, const Term *t, uint64_t *level, int pretype) {
   const Value *type = NULL;
-  const Core *k = infer(c, t, &type);
+  Mult at = c->at;
+  const Core *k;
+  c->at = MULT_ZERO; /* a type uses nothing (PLAN 4.1) */
+  k = infer(c, t, &type);
+  c->at = at;
   if (k == NULL)
     return NULL;
   if (pretype && val_is(type, OP_SSET)) {
@@ -437,12 +589,16 @@ static const Value *carried(Checker *c, const Value *shape, const Value *elem) {
 
 /* Checks T as a function from DOM. *RESULT is WANT, or the result type that
    T infers when WANT is NULL. */
+static const Value *case_arrow(Checker *c, const Value *dom, const Value *cod) {
+  return val_arrow_mult(c->m, copyable_type(c, dom) ? MULT_OMEGA : MULT_ONE, dom, cod);
+}
+
 static const Core *fn_into(Checker *c, const Term *t, const Value *dom, const Value *want, const Value **result) {
   const Value *ft = NULL;
   const Core *f;
   if (want != NULL) {
     *result = want;
-    return check(c, t, val_arrow(c->m, dom, want));
+    return check(c, t, case_arrow(c, dom, want));
   }
   f = infer(c, t, &ft);
   if (f == NULL)
@@ -455,16 +611,21 @@ static const Core *fn_into(Checker *c, const Term *t, const Value *dom, const Va
   if (!converts(c, c->level + 2u, *result,
                    closure_apply(c->m, ft, val_var(c->m, c->level + 1u))))
     return nul(FAIL(c, "TYPE_MISMATCH", "this operation needs a function with a non-dependent result type"));
-  return expect(c, ft, val_arrow(c->m, dom, *result)) ? f : NULL;
+  return expect(c, ft, case_arrow(c, dom, *result)) ? f : NULL;
 }
 
 /* The argument type of the function T, from its binder or its type. */
 static const Value *lam_domain(Checker *c, const Term *t) {
   uint64_t level = 0;
   const Value *ft = NULL;
+  uint32_t *uses;
+  int ok;
   if (t->kind == TERM_LAM && t->left != NULL)
     return here(c, check_type(c, t->left, &level));
-  return try_infer(c, t, &ft) != NULL && ft != NULL && ft->kind == VAL_PI ? ft->dom : NULL;
+  uses = uses_save(c);
+  ok = try_infer(c, t, &ft) != NULL;
+  uses_restore(c, uses); /* the caller checks T again */
+  return ok && ft != NULL && ft->kind == VAL_PI ? ft->dom : NULL;
 }
 
 /* The carried argument ARG of map, bind or filter. When ARG does not infer
@@ -528,8 +689,12 @@ static const Core *const_line(Checker *c, const Term *t, uint64_t *level) {
 /* PathP A: A is a line of type I → Type n. */
 static const Core *pathp_line(Checker *c, const Term *t, uint64_t *level) {
   const Value *lt = NULL;
-  const Core *a = infer(c, t, &lt);
+  Mult at = c->at;
+  const Core *a;
   const Value *cod = NULL;
+  c->at = MULT_ZERO;
+  a = infer(c, t, &lt);
+  c->at = at;
   if (a == NULL)
     return NULL;
   if (lt != NULL && lt->kind == VAL_PI && converts(c, c->level, lt->dom, op0(c, OP_I)))
@@ -620,6 +785,50 @@ static const Core *trans_body(Checker *c, const Core *p, const Value *tp, const 
   return core_op(c, OP_HCOMP, 0, 0, args, 4u);
 }
 
+/* 1 when the variable with the de Bruijn index I is free in K. */
+static int core_free(const Core *k, uint32_t i) {
+  uint32_t j;
+  if (k == NULL)
+    return 0;
+  switch (k->kind) {
+  case CORE_VAR:
+    return k->index == i;
+  case CORE_GLOBAL:
+  case CORE_NAT:
+  case CORE_TRAP:
+  case CORE_UNIV:
+    return 0;
+  case CORE_LAM:
+  case CORE_PI:
+  case CORE_SIGMA:
+    return core_free(k->a, i) || core_free(k->b, i + 1u);
+  case CORE_APP:
+    return core_free(k->a, i) || core_free(k->b, i);
+  case CORE_OP:
+    for (j = 0; j < k->argc; j++) {
+      if (core_free(k->args[j], i))
+        return 1;
+    }
+    return core_free(k->a, i) || core_free(k->b, i);
+  }
+  return 0;
+}
+
+/* refl is λ i → a with a from the type, so it counts no use. At 1 or at
+   omega, each 1-variable free in A is REFUSE_AFFINE_PATH (PLAN 4.2). */
+static int refl_free(Checker *c, const Value *a) {
+  const Core *q = c->at == MULT_ZERO ? NULL : quote_value(c->m, c->level, a);
+  const Scope *s;
+  uint32_t i = 0;
+  for (s = c->scope; s != NULL && q != NULL; s = s->next, i++) {
+    if (s->mult == MULT_ZERO && core_free(q, i))
+      return FAIL(c, "REFUSE_AFFINE_REUSE", "the erased variable %s occurs in an executable path endpoint: used 1, allowed 0 (PLAN 4.1)", s->name);
+    if (s->mult == MULT_ONE && core_free(q, i))
+      return FAIL(c, "REFUSE_AFFINE_PATH", "the variable %s %s, allowed 1 (PLAN 4.2)", s->name, PATH_WHY);
+  }
+  return 1;
+}
+
 static const Core *rule_refl(Call *k) {
   Checker *c = k->c;
   const Value *e = k->hint;
@@ -627,6 +836,8 @@ static const Core *rule_refl(Call *k) {
     return need_type(k, "Path A a b");
   if (!converts(c, c->level, e->args[1], e->args[2]))
     return nul(FAIL(c, "TYPE_REFL", "refl cannot prove the equality: the left side normalizes to %s, the right side normalizes to %s", show(c, e->args[1]), show(c, e->args[2])));
+  if (!refl_free(c, e->args[1]))
+    return NULL;
   k->type = e;
   return path_lam(c, "i", quote_value(c->m, c->level + 1u, e->args[1]));
 }
@@ -645,12 +856,38 @@ static const Core *rule_sigma_part(Call *k) {
   return k->b->part == 0u ? w : op3(c, OP_PAYLOAD, 0, 1, s, NULL, NULL);
 }
 
+/* unpack p f (Q-S3-6 (a)): p : Sigma (x : A) B is used one time, and f
+   takes the two parts at 1: (@1 a : A) → (@1 b : B a) → C, where C is the
+   declared type. The Core applies f to witness p and payload p, so the
+   lowering does not change. */
+static const Core *rule_unpack(Call *k) {
+  Checker *c = k->c;
+  const Value *st = NULL;
+  const Core *s = infer(c, k->args[0], &st);
+  const Core *ft;
+  const Core *f;
+  if (s == NULL)
+    return NULL;
+  if (st == NULL || st->kind != VAL_SIGMA)
+    return nul(FAIL(c, "TYPE_MISMATCH", "unpack needs a Sigma value, found a term of type %s", show(c, st)));
+  if (k->hint == NULL)
+    return need_type(k, "C for the result of its function");
+  ft = core_binder(c, CORE_PI, MULT_ONE, "a", quote_value(c->m, c->level, st->dom),
+                   core_binder(c, CORE_PI, MULT_ONE, "b", quote_value(c->m, c->level + 1u, closure_apply(c->m, st, val_var(c->m, c->level))),
+                               quote_value(c->m, c->level + 2u, k->hint)));
+  f = check(c, k->args[1], here(c, ft));
+  k->type = k->hint;
+  return f == NULL ? NULL : core_app(c, core_app(c, f, op3(c, OP_WITNESS, 0, 1, s, NULL, NULL)), op3(c, OP_PAYLOAD, 0, 1, s, NULL, NULL));
+}
+
 /* option z f o */
 static const Core *rule_option(Call *k) {
   Checker *c = k->c;
   const Value *ot = NULL;
   const Value *res = k->hint;
   const Core *o = infer(c, k->args[2], &ot);
+  uint32_t *start = uses_save(c); /* the scrutinee one time; each arm from here */
+  uint32_t *most;
   const Core *z;
   const Core *f;
   if (o == NULL)
@@ -658,7 +895,10 @@ static const Core *rule_option(Call *k) {
   if (!val_is(ot, OP_OPTION))
     return nul(FAIL(c, "TYPE_MISMATCH", "option needs a value of type Option A, found a term of type %s", show(c, ot)));
   z = res != NULL ? check(c, k->args[0], res) : infer(c, k->args[0], &res);
-  f = z == NULL ? NULL : check(c, k->args[1], val_arrow(c->m, ot->args[0], res));
+  most = uses_save(c);
+  uses_restore(c, start);
+  f = z == NULL ? NULL : check(c, k->args[1], case_arrow(c, ot->args[0], res));
+  uses_max(c, most);
   k->type = res;
   return op3(c, OP_OPTION_ELIM, 0, 3, z, f, o);
 }
@@ -720,8 +960,15 @@ static const Core *rule_bind(Call *k) {
 static const Core *fold_simple(Call *k, const Core *s) {
   Checker *c = k->c;
   const Value *res = k->hint;
+  uint32_t *start = uses_save(c); /* each arm from here; the step runs one time for each layer (R2) */
   const Core *z = res != NULL ? check(c, k->args[1], res) : infer(c, k->args[1], &res);
-  const Core *f = z == NULL ? NULL : check(c, k->args[0], val_arrow(c->m, res, res));
+  uint32_t *most = uses_save(c);
+  const Core *f;
+  uses_restore(c, start);
+  f = z == NULL ? NULL : check(c, k->args[0], case_arrow(c, res, res));
+  if (f != NULL && !uses_refuse(c, start, "REFUSE_AFFINE_FIX", FIX_WHY))
+    return NULL;
+  uses_max(c, most);
   k->used = 3u;
   k->type = res;
   return op3(c, OP_FOLD_NAT, 0, 3, f, z, s);
@@ -734,9 +981,20 @@ static const Value *case_type(Checker *c, const CtorInfo *ctor, const Env *env, 
   uint32_t i = ctor->field_count;
   while (i > 0u && t != NULL) {
     const FieldInfo *field = &ctor->fields[--i];
-    t = val_arrow(c->m, field->recursive ? res : eval_core(c->m, env, field->type), t);
+    t = case_arrow(c, field->recursive ? res : eval_core(c->m, env, field->type), t);
   }
   return t;
+}
+
+/* 1 when CTOR has a recursive field: its fold case runs one time for each
+   layer (PLAN 4.2). */
+static int ctor_recursive(const CtorInfo *ctor) {
+  uint32_t i;
+  for (i = 0; i < ctor->field_count; i++) {
+    if (ctor->fields[i].recursive)
+      return 1;
+  }
+  return 0;
 }
 
 /* fold case... x over a domain family: one case for each constructor. */
@@ -747,6 +1005,8 @@ static const Core *fold_family(Call *k, const Core *s, const Value *st) {
   const Env *env = env_of(c, st->args, st->argc);
   const Value *res = k->hint;
   const Core **cores = arena_alloc(m->arena, ((size_t)f->ctor_count + 2u) * sizeof *cores);
+  uint32_t *start = uses_save(c); /* each case from here; a recursive case runs one time for each layer (R2) */
+  uint32_t *most = start;
   uint32_t j;
   if (cores == NULL)
     return nul(FAIL(c, "OOM", "out of memory"));
@@ -755,9 +1015,15 @@ static const Core *fold_family(Call *k, const Core *s, const Value *st) {
   if (res == NULL)
     return nul(FAIL(c, "TYPE_INFER", "fold over %s needs a declared result type here", f->name));
   for (j = 0; j < f->ctor_count; j++) {
+    if (cores[j] == NULL)
+      uses_restore(c, start);
     cores[j] = cores[j] != NULL ? cores[j] : check(c, k->args[j], case_type(c, &m->ctors[f->first_ctor + j], env, res));
     if (cores[j] == NULL)
       return NULL;
+    if (ctor_recursive(&m->ctors[f->first_ctor + j]) && !uses_refuse(c, start, "REFUSE_AFFINE_FIX", FIX_WHY))
+      return NULL;
+    uses_max(c, most);
+    most = uses_save(c);
   }
   cores[f->ctor_count] = s;
   k->used = f->ctor_count + 1u;
@@ -773,6 +1039,7 @@ static int simple_scrutinee(const Value *t) {
 static const Core *rule_fold(Call *k) {
   Checker *c = k->c;
   const Value *st = NULL;
+  uint32_t *uses = uses_save(c);
   const Core *s = try_infer(c, k->args[k->argc - 1u], &st);
   uint32_t fam = val_is(st, OP_FAMILY) ? st->inst : NO_FAMILY;
   if (s != NULL && fam != NO_FAMILY && c->m->families[fam].ctor_count + 1u == k->argc) {
@@ -783,6 +1050,7 @@ static const Core *rule_fold(Call *k) {
     k->hint = k->outer;
     return fold_simple(k, s);
   }
+  uses_restore(c, uses); /* the last argument is checked again */
   s = k->argc > 3u ? try_infer(c, k->args[2], &st) : NULL;
   if (s != NULL && simple_scrutinee(st)) {
     k->hint = NULL;
@@ -865,8 +1133,13 @@ static const Core *rule_flag_if(Call *k) {
   Checker *c = k->c;
   const Value *res = k->hint;
   const Core *b = check(c, k->args[0], bool_type(c));
+  uint32_t *start = uses_save(c); /* the scrutinee one time; each arm from here */
   const Core *yes = b == NULL ? NULL : (res != NULL ? check(c, k->args[1], res) : infer(c, k->args[1], &res));
-  const Core *no = yes == NULL ? NULL : check(c, k->args[2], res);
+  uint32_t *most = uses_save(c);
+  const Core *no;
+  uses_restore(c, start);
+  no = yes == NULL ? NULL : check(c, k->args[2], res);
+  uses_max(c, most);
   k->type = res;
   return op3(c, OP_FLAG_IF, 0, 3, b, yes, no);
 }
@@ -1323,6 +1596,15 @@ static const Core *rule_unglue(Call *k) {
   return core_op(c, OP_UNGLUE, 0, 0, args, 4u);
 }
 
+/* A path rule (PLAN 4.2): each 1-variable that its arguments use is free
+   under an interval binder or in transp, hcomp, Glue, so both end points
+   hold it. */
+static const Core *path_rule(Call *k, const Core *(*f)(Call *)) {
+  uint32_t *saved = uses_save(k->c);
+  const Core *r = f(k);
+  return r != NULL && !uses_refuse(k->c, saved, "REFUSE_AFFINE_PATH", PATH_WHY) ? NULL : r;
+}
+
 static const Core *rule(Call *k) {
   switch (k->b->rule) {
   case RULE_TYPE0:
@@ -1338,15 +1620,15 @@ static const Core *rule(Call *k) {
   case RULE_SYSTEM:
     return rule_system(k);
   case RULE_TRANSP:
-    return rule_transp(k);
+    return path_rule(k, rule_transp);
   case RULE_HCOMP:
-    return rule_hcomp(k);
+    return path_rule(k, rule_hcomp);
   case RULE_GLUE:
-    return rule_glue(k);
+    return path_rule(k, rule_glue);
   case RULE_GLUE_ELEM:
-    return rule_glue_elem(k);
+    return path_rule(k, rule_glue_elem);
   case RULE_UNGLUE:
-    return rule_unglue(k);
+    return path_rule(k, rule_unglue);
   case RULE_TYPE1:
     return rule_type1(k);
   case RULE_EMPTY:
@@ -1359,6 +1641,8 @@ static const Core *rule(Call *k) {
     return rule_refl(k);
   case RULE_SIGMA_PART:
     return rule_sigma_part(k);
+  case RULE_UNPACK:
+    return rule_unpack(k);
   case RULE_OPTION:
     return rule_option(k);
   case RULE_PURE:
@@ -1370,13 +1654,13 @@ static const Core *rule(Call *k) {
   case RULE_FOLD:
     return rule_fold(k);
   case RULE_SYMM:
-    return rule_symm(k);
+    return path_rule(k, rule_symm);
   case RULE_TRANS:
-    return rule_trans(k);
+    return path_rule(k, rule_trans);
   case RULE_CONG:
-    return rule_cong(k);
+    return path_rule(k, rule_cong);
   case RULE_TRANSPORT:
-    return rule_transport(k);
+    return path_rule(k, rule_transport);
   case RULE_NAT2:
     return rule_nat2(k);
   case RULE_FLAG_IF:
@@ -1391,7 +1675,7 @@ static const Core *rule(Call *k) {
 static int check_params(Checker *c, const FamilyInfo *f, const Term *const *args, const Core **cores, const Value **vals) {
   uint32_t i;
   for (i = 0; i < f->param_count; i++) {
-    cores[i] = check(c, args[i], eval_core(c->m, env_of(c, vals, i), f->param_types[i]));
+    cores[i] = check_at(c, MULT_ZERO, args[i], eval_core(c->m, env_of(c, vals, i), f->param_types[i]));
     vals[i] = here(c, cores[i]);
     if (vals[i] == NULL)
       return 0;
@@ -1643,7 +1927,7 @@ static const Core *apply_one(Checker *c, const Core *k, const Value **ty, const 
     return path_app(c, k, t, arg, ty);
   if (t == NULL || t->kind != VAL_PI)
     return nul(FAIL(c, "TYPE_NOT_FUNCTION", "a term of type %s is applied to an argument", show(c, t)));
-  a = check(c, arg, t->dom);
+  a = check_at(c, t->dom->kind == VAL_UNIV ? MULT_ZERO : mult_scale(c->at, t->mult), arg, t->dom);
   *ty = closure_apply(c->m, t, here(c, a));
   return core_app(c, k, a);
 }
@@ -1658,23 +1942,57 @@ static const Core *apply_rest(Checker *c, const Core *k, const Value *ty, const 
 }
 
 static const Core *var_core(Checker *c, const char *name, const Value **type) {
-  const Scope *s = find_local(c, name);
+  Scope *s = find_local(c, name);
   uint32_t d = find_def(c->m, name);
   if (s != NULL) {
     *type = s->type;
-    return core_index(c, CORE_VAR, c->level - 1u - s->level);
+    return use_local(c, s) ? core_index(c, CORE_VAR, c->level - 1u - s->level) : NULL;
   }
   if (d != NO_DEF) {
+    if (c->at != MULT_ZERO && c->m->defs[d].runtime_refusal != NULL)
+      return nul(FAIL(c, c->m->defs[d].runtime_refusal, "%s is checked at 0 and its body is unsafe at run time; it can only be used in an erased position (PLAN 4.1)", name));
     *type = c->m->defs[d].type;
     return core_index(c, CORE_GLOBAL, d);
   }
   return nul(FAIL(c, "NAME_UNKNOWN", "unknown name %s", name));
 }
 
+/* 1 when NAME is a line of a codata (an observation such as `head`, a
+   cofield such as `tail`) or its corecursor D.corec (S2 U6c2a, U6c2b). */
+static int opens_codata(const Checker *c, const char *name) {
+  size_t i;
+  size_t j;
+  for (i = 0; i < c->decls->count; i++) {
+    const Decl *d = &c->decls->items[i];
+    size_t n = strlen(d->name);
+    if (d->kind == DECL_COFAMILY && strncmp(name, d->name, n) == 0 && strcmp(name + n, ".corec") == 0)
+      return 1;
+    for (j = 0; d->kind == DECL_COFAMILY && j < d->ctor_count; j++) {
+      if (strcmp(d->ctors[j].name, name) == 0)
+        return 1;
+    }
+  }
+  return 0;
+}
+
+/* REFUSE_SEALED (PLAN 4.2, Q-S3-7 (a)): a line of a codata or D.corec at a
+   type argument with a resource sort in it opens or builds a Keystore.
+   Only the core opens a Keystore (S5 `next`). */
 static const Core *apply_term(Checker *c, const Term *head, const Term *const *args, uint32_t argc, const Value *hint, const Value **type) {
   const Value *ty = NULL;
   const Core *k = head->kind == TERM_VAR ? var_core(c, head->name, &ty) : infer(c, head, &ty);
-  return apply_rest(c, k, ty, args, argc, hint, type);
+  uint32_t i;
+  int sealed = k != NULL && argc > 0u && head->kind == TERM_VAR && find_local(c, head->name) == NULL && opens_codata(c, head->name);
+  if (!sealed)
+    return apply_rest(c, k, ty, args, argc, hint, type);
+  for (i = 0; i < argc && k != NULL; i++) {
+    int type_arg = ty != NULL && ty->kind == VAL_PI && ty->dom->kind == VAL_UNIV;
+    k = apply_one(c, k, &ty, args[i]);
+    if (type_arg && k != NULL && k->kind == CORE_APP && resource_type(c, here(c, k->b)))
+      return nul(FAIL(c, "REFUSE_SEALED", "%s at %s opens or builds a stream with a resource sort in its head, a Keystore; the Keystore is sealed and only the core opens it (PLAN 4.2)", head->name, show(c, here(c, k->b))));
+  }
+  *type = ty;
+  return finish(c, k, hint, type);
 }
 
 static const Core *apply_known(Checker *c, const Term *whole, const Head *h, const Term *const *args, uint32_t argc, const Value *hint, const Value **type) {
@@ -1728,8 +2046,12 @@ static int annotation_ok(Checker *c, const Term *ann, const Value *dom) {
 }
 
 /* λ i → t against E = PathP A a b: t checks against A i under i : I, then
-   the ends of the path must be a and b. */
+   the ends of the path must be a and b. Both ends hold t, so at 1 each
+   1-variable that t uses is REFUSE_AFFINE_PATH; at omega t counts for one
+   call, as in check_lam (PLAN 4.2). */
 static const Core *check_plam(Checker *c, const Term *t, const Value *e, const Value **type) {
+  Mult at = c->at;
+  uint32_t *uses = at == MULT_ZERO ? NULL : uses_save(c);
   const Core *body;
   const Core *lam;
   const Value *f;
@@ -1739,8 +2061,12 @@ static const Core *check_plam(Checker *c, const Term *t, const Value *e, const V
     return NULL;
   if (!push(c, t->name, op0(c, OP_I)))
     return NULL;
-  body = check(c, t->right, apply_value(c->m, e->args[0], c->env->value));
+  body = check_at(c, at == MULT_OMEGA ? MULT_ONE : at, t->right, apply_value(c->m, e->args[0], c->env->value));
   pop(c);
+  if (body != NULL && !uses_refuse(c, uses, "REFUSE_AFFINE_PATH", PATH_WHY))
+    return NULL;
+  if (body != NULL && at == MULT_OMEGA && !uses_omega(c, uses))
+    return NULL;
   lam = core_bind(c, CORE_LAM, t->name, NULL, body);
   f = here(c, lam);
   if (f == NULL)
@@ -1756,19 +2082,27 @@ static const Core *check_plam(Checker *c, const Term *t, const Value *e, const V
 }
 
 static const Core *check_lam(Checker *c, const Term *t, const Value *hint, const Value **type) {
+  Mult at = c->at;
+  uint32_t *uses = at == MULT_OMEGA ? uses_save(c) : NULL;
   const Core *body;
   if (val_is(hint, OP_PATHP))
     return check_plam(c, t, hint, type);
   if (hint->kind != VAL_PI)
     return nul(FAIL(c, "TYPE_MISMATCH", "a function is not a term of type %s", show(c, hint)));
+  if (t->mult != MULT_OMEGA && t->mult != hint->mult)
+    return nul(FAIL(c, "TYPE_MISMATCH", "the explicit binder multiplicity does not match the declared function type"));
+  if (hint->mult == MULT_OMEGA && resource_type(c, hint->dom))
+    return nul(FAIL(c, "REFUSE_AFFINE_OMEGA", "a resource argument cannot have an omega binder (PLAN 4.1)"));
   if (t->left != NULL && !annotation_ok(c, t->left, hint->dom))
     return NULL;
-  if (!push(c, t->name, hint->dom))
+  if (!push_at(c, hint->mult, t->name, hint->dom))
     return NULL;
-  body = check(c, t->right, closure_apply(c->m, hint, c->env->value));
+  body = check_at(c, at == MULT_OMEGA ? MULT_ONE : at, t->right, closure_apply(c->m, hint, c->env->value));
   pop(c);
+  if (body != NULL && at == MULT_OMEGA && !uses_omega(c, uses))
+    return NULL;
   *type = hint;
-  return core_bind(c, CORE_LAM, t->name, NULL, body);
+  return core_binder(c, CORE_LAM, hint->mult, t->name, NULL, body);
 }
 
 static const Core *infer_lam(Checker *c, const Term *t, const Value **type) {
@@ -1777,16 +2111,92 @@ static const Core *infer_lam(Checker *c, const Term *t, const Value **type) {
   const Value *bt = NULL;
   const Core *body;
   const Core *quoted;
+  Mult at = c->at;
+  uint32_t *uses = at == MULT_OMEGA ? uses_save(c) : NULL;
   if (t->left == NULL)
     return nul(FAIL(c, "TYPE_INFER", "fun %s => ... needs a binder type here", t->name));
   dom = here(c, check_type_at(c, t->left, &level, 1));
-  if (!push(c, t->name, dom))
+  if (!push_at(c, t->mult, t->name, dom))
     return NULL;
+  c->at = at == MULT_OMEGA ? MULT_ONE : at;
   body = infer(c, t->right, &bt);
+  c->at = at;
   quoted = body == NULL ? NULL : quote_value(c->m, c->level, bt);
   pop(c);
-  *type = val_closure(c->m, VAL_PI, t->name, dom, c->env, quoted);
-  return core_bind(c, CORE_LAM, t->name, NULL, body);
+  if (body != NULL && at == MULT_OMEGA && !uses_omega(c, uses))
+    return NULL;
+  if (t->mult == MULT_OMEGA && resource_type(c, dom))
+    return nul(FAIL(c, "REFUSE_AFFINE_OMEGA", "the binder %s has the resource type %s at omega; bind it at 1 (@1 or ⊸) or at 0 (@0) (PLAN 4.1)", t->name != NULL ? t->name : "_", show(c, dom)));
+  *type = val_binder(c->m, VAL_PI, t->mult, t->name, dom, c->env, quoted);
+  return core_binder(c, CORE_LAM, t->mult, t->name, NULL, body);
+}
+
+/* 1 when V is the position family D.pos of a codata D (S2 U6c2a). */
+static int pos_family(const Checker *c, const Value *v) {
+  const char *name = v != NULL && v->kind == VAL_OP && v->op == OP_FAMILY && v->argc == 0u && v->inst < c->m->family_count ? c->m->families[v->inst].name : NULL;
+  size_t n = name == NULL ? 0u : strlen(name);
+  return n > 4u && strcmp(name + n - 4u, ".pos") == 0;
+}
+
+typedef enum { RESOURCE_NONE, RESOURCE_UNKNOWN, RESOURCE_PRESENT } Resource;
+
+static Resource resource_join(Resource a, Resource b) {
+  return a > b ? a : b;
+}
+
+/* Inspect run-time fields after substituting family parameters. Unknown
+   types stay distinct from types known to contain no resources: an
+   eliminator must not promote a polymorphic payload to omega. Ordinary
+   function types retain the QTT reading with no closure bit. */
+static Resource resource_shape(Checker *c, const Value *v, uint32_t level) {
+  const FamilyInfo *f;
+  const Env *env;
+  Resource shape = RESOURCE_NONE;
+  uint32_t i;
+  uint32_t j;
+  if (v == NULL)
+    return RESOURCE_UNKNOWN;
+  if (v->kind == VAL_UNIV)
+    return RESOURCE_NONE;
+  if (v->kind == VAL_PI)
+    return pos_family(c, v->dom) ? resource_shape(c, closure_apply(c->m, v, val_var(c->m, level)), level + 1u) : RESOURCE_UNKNOWN;
+  if (v->kind == VAL_SIGMA)
+    return resource_join(resource_shape(c, v->dom, level), resource_shape(c, closure_apply(c->m, v, val_var(c->m, level)), level + 1u));
+  if (v->kind != VAL_OP)
+    return RESOURCE_UNKNOWN;
+  if (v->op == OP_LEAF)
+    return RESOURCE_PRESENT;
+  if (v->op == OP_NAT || v->op == OP_BOOL || v->op == OP_UNIT || v->op == OP_I || v->op == OP_SSET)
+    return RESOURCE_NONE;
+  if (v->op == OP_OPTION && v->argc == 1u)
+    return resource_shape(c, v->args[0], level);
+  if (v->op == OP_PATHP && v->argc == 3u)
+    return resource_shape(c, apply_value(c->m, v->args[0], op0(c, OP_I0)), level);
+  if (v->op == OP_FLAG_IF && v->argc == 3u)
+    return resource_join(resource_shape(c, v->args[1], level), resource_shape(c, v->args[2], level));
+  if (v->op != OP_FAMILY || v->inst >= c->m->family_count)
+    return RESOURCE_UNKNOWN;
+  f = &c->m->families[v->inst];
+  env = env_of(c, v->args, v->argc);
+  /* Direct recursive fields repeat this family. All other fields form
+     an acyclic graph, since forward references are refused. Inspect the
+     instantiated fields, including closed families and every parameter. */
+  for (i = 0; i < f->ctor_count; i++) {
+    const CtorInfo *ctor = &c->m->ctors[f->first_ctor + i];
+    for (j = 0; j < ctor->field_count; j++) {
+      if (!ctor->fields[j].recursive)
+        shape = resource_join(shape, resource_shape(c, eval_core(c->m, env, ctor->fields[j].type), level));
+    }
+  }
+  return shape;
+}
+
+static int resource_type(Checker *c, const Value *v) {
+  return resource_shape(c, v, c->level) == RESOURCE_PRESENT;
+}
+
+static int copyable_type(Checker *c, const Value *v) {
+  return resource_shape(c, v, c->level) == RESOURCE_NONE;
 }
 
 /* (x : A) -> B and Sigma (x : A) B. */
@@ -1796,12 +2206,14 @@ static const Core *elab_binder(Checker *c, const Term *t, CoreKind kind, const V
   int pretype = kind == CORE_PI; /* a Pi over I is a pretype; a Sigma refuses one */
   const Core *a = check_type_at(c, t->left, &la, pretype);
   const Core *b;
-  if (a == NULL || !push(c, t->name, here(c, a)))
+  if (a != NULL && kind == CORE_PI && t->mult == MULT_OMEGA && resource_type(c, here(c, a)))
+    return nul(FAIL(c, "REFUSE_AFFINE_OMEGA", "the binder %s has the resource type %s at omega; bind it at 1 (@1 or ⊸) or at 0 (@0) (PLAN 4.1)", t->name != NULL ? t->name : "_", show(c, here(c, a))));
+  if (a == NULL || !push_at(c, t->mult, t->name, here(c, a)))
     return NULL;
   b = check_type_at(c, t->right, &lb, pretype);
   pop(c);
   *type = la == UINT64_MAX || lb == UINT64_MAX ? op0(c, OP_SSET) : val_univ(c->m, la > lb ? la : lb);
-  return finish(c, core_bind(c, kind, t->name, a, b), hint, type);
+  return finish(c, core_binder(c, kind, t->mult, t->name, a, b), hint, type);
 }
 
 static const Core *elab_inner(Checker *c, const Term *t, const Value *hint, const Value **type) {
@@ -1833,6 +2245,11 @@ static const Core *elab(Checker *c, const Term *t, const Value *hint, const Valu
     return nul(FAIL(c, "CHECK_DEPTH", "the term is nested deeper than %u levels", CHECK_DEPTH_LIMIT));
   c->depth++;
   k = elab_inner(c, t, hint, type);
+  if (k != NULL && *type != NULL && (*type)->kind == VAL_PI && pos_family(c, (*type)->dom) && resource_type(c, *type)) {
+    const Value *v = here(c, k);
+    if (v != NULL && v->kind == VAL_LAM)
+      k = nul(FAIL(c, "REFUSE_SEALED", "a function cannot construct a stream with a resource sort in its head; only the core builds a Keystore (PLAN 4.2)"));
+  }
   c->depth--;
   return k;
 }
@@ -1964,9 +2381,12 @@ static int cell_generators(Checker *c, const Decl *d, uint32_t fam) {
   return 1;
 }
 
-/* A recursive field must be the whole field type, in a family with no
-   parameters. A field of a family with a type parameter meets the cell
-   criterion first. */
+/* A recursive field must be the whole field type: the family itself in a
+   family with no parameters, or the family at its own parameters in a
+   family with type parameters (the free cell monad, PLAN 2.2). A field of
+   a family with a type parameter meets the cell criterion first.
+   check_ctor allows one recursive field in each constructor of a family
+   with parameters (a spine, O-U6b-1). */
 static int check_field(Checker *c, uint32_t fam, const Field *field, FieldInfo *out, size_t field_count) {
   uint64_t level = 0;
   const Core *t;
@@ -1979,14 +2399,15 @@ static int check_field(Checker *c, uint32_t fam, const Field *field, FieldInfo *
     return 0;
   if (level > c->m->families[fam].universe)
     c->m->families[fam].universe = level;
-  whole = t->kind == CORE_OP && t->op == OP_FAMILY && t->inst == fam && c->m->families[fam].param_count == 0u;
+  whole = t->kind == CORE_OP && t->op == OP_FAMILY && t->inst == fam &&
+          (c->m->families[fam].param_count == 0u || (has_type_param(&c->m->families[fam]) && own_family(&c->m->families[fam], fam, t)));
   out->name = field->name;
   out->type = t;
   out->recursive = c->self_uses > 0u;
   if (has_type_param(&c->m->families[fam]) && !cell_field(c, fam, out, field_count))
     return 0;
   if (out->recursive && !whole)
-    return FAIL(c, "DOMAIN_FAMILY", "the recursive field %s must have the type %s itself, in a family with no parameters", field->name, c->m->families[fam].name);
+    return FAIL(c, "DOMAIN_FAMILY", "the recursive field %s must have the type %s itself in a family with no parameters, or %s at its own parameters in a family with type parameters", field->name, c->m->families[fam].name, c->m->families[fam].name);
   return 1;
 }
 
@@ -1994,6 +2415,7 @@ static int check_ctor(Checker *c, uint32_t fam, const Ctor *ctor) {
   Machine *m = c->m;
   FieldInfo *fields = arena_alloc(m->arena, (ctor->field_count + 1u) * sizeof *fields);
   CtorInfo *ci = &m->ctors[m->ctor_count];
+  uint32_t recursive = 0;
   size_t j;
   if (fields == NULL)
     return FAIL(c, "OOM", "out of memory");
@@ -2009,6 +2431,9 @@ static int check_ctor(Checker *c, uint32_t fam, const Ctor *ctor) {
         return FAIL(c, "REFUSE_NAME", "%s is already a field of this constructor (rule R4)", name);
     if (!check_field(c, fam, &ctor->fields[j], &fields[j], ctor->field_count))
       return 0;
+    recursive += fields[j].recursive ? 1u : 0u;
+    if (recursive > 1u && m->families[fam].param_count > 0u)
+      return FAIL(c, "DOMAIN_FAMILY", "the recursive field %s is the second recursive field of %s; a family with parameters has at most one recursive field in each constructor", name, ctor->name);
   }
   ci->name = ctor->name;
   ci->family = fam;
@@ -2158,6 +2583,7 @@ static void checker_reset(Checker *c, size_t index, const char *name) {
   c->level = 0;
   c->depth = 0;
   c->self = NO_FAMILY;
+  c->at = MULT_ZERO;
   c->m->def = name;
 }
 
@@ -2422,6 +2848,17 @@ static int check_cofamily(Checker *c, const Decl *d) {
   return check_built(c, &built);
 }
 
+/* 1 when the type V, after its Pi binders, is a universe, Path or PathP (a
+   type, a law or a proof): its definition is checked at 0 (Q-S3-5 (a)). */
+static int erased_type(Checker *c, const Value *v) {
+  uint32_t level = c->level;
+  while (v != NULL && v->kind == VAL_PI) {
+    v = closure_apply(c->m, v, val_var(c->m, level));
+    level++;
+  }
+  return v != NULL && (v->kind == VAL_UNIV || val_is(v, OP_PATHP));
+}
+
 static int check_def(Checker *c, const Decl *d) {
   Machine *m = c->m;
   uint64_t level = 0;
@@ -2429,7 +2866,7 @@ static int check_def(Checker *c, const Decl *d) {
      line, or a family of partial elements. A bare pretype is not. */
   const Core *t = check_type_at(c, d->type, &level, d->type->kind == TERM_PI);
   const Value *tv = here(c, t);
-  const Core *body = check(c, d->body, tv);
+  const Core *body = check_at(c, erased_type(c, tv) ? MULT_ZERO : MULT_ONE, d->body, tv);
   DefInfo *info = &m->defs[m->def_count];
   if (body == NULL)
     return 0;
@@ -2438,6 +2875,19 @@ static int check_def(Checker *c, const Decl *d) {
   info->body = body;
   info->type = tv;
   info->value = NULL;
+  info->runtime_refusal = NULL;
+  if (erased_type(c, tv)) {
+    Checker probe = *c;
+    Machine runtime = *m;
+    Diag diag;
+    diag_init(&diag);
+    runtime.diag = &diag;
+    probe.m = &runtime;
+    /* An erased law may use its inputs freely. Record whether that same
+       body also checks at 1 before allowing an executable reference. */
+    if (check_at(&probe, MULT_ONE, d->body, tv) == NULL)
+      info->runtime_refusal = diag.code != NULL ? diag.code : "REFUSE_AFFINE_REUSE";
+  }
   m->def_count++;
   return 1;
 }

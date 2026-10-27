@@ -202,6 +202,7 @@ static void dump_term(const char *role, const Term *t, int depth) {
   printf("%*s%s %s", depth * 2, "", role, TERM_KINDS[t->kind]);
   if (t->name != NULL) printf(" %s", t->name);
   if (t->kind == TERM_NAT || t->kind == TERM_UNIV) printf(" %llu", (unsigned long long)t->nat);
+  if (t->mult != MULT_OMEGA) printf(" @%d", t->mult == MULT_ONE ? 1 : 0);
   putchar('\n');
   dump_term("left", t->left, depth + 1);
   dump_term("right", t->right, depth + 1);
@@ -310,6 +311,80 @@ int main(int argc, char **argv) {
                "nx : Lab ℕ → Lab ℕ\nnx = λ s → step ℕ s 3", "TYPE_MISMATCH");
   ok &= domain("codata Stream (A : Type 0) : Type where\n  head : Stream A → A\n  tail : Stream A → Stream A\n\n"
                "head : ℕ\nhead = 0", "REFUSE_NAME");
+  /* S3 U3: a resource binder at omega; ⊸ and → do not convert (Q-S3-3 (a)). */
+  ok &= domain("keep : Option (ℕ × Leaf) → ℕ\nkeep o = 0", "REFUSE_AFFINE_OMEGA");
+  ok &= domain("f : ℕ ⊸ ℕ\nf n = n\ng : ℕ → ℕ\ng = f", "TYPE_MISMATCH");
+  /* S3 U4a: a 0-variable at run time is a use above its multiplicity
+     (Q-S3-4 (a)); the definition is checked at 1 (Q-S3-5 (a)). */
+  ok &= domain("drop : (@0 n : ℕ) → ℕ\ndrop n = n", "REFUSE_AFFINE_REUSE");
+  /* S3 U4b: positive cases (O-U4a-5): a 1-variable used one time, a
+     0-variable in a type position, a law checked at 0. */
+  ok &= domain("once : Leaf ⊸ Leaf\nonce l = l", NULL);
+  /* Review regressions: eliminators preserve resource payloads. */
+  ok &= domain("dup : Option Leaf ⊸ Option (Leaf × Leaf)\ndup o = option none (λ l → some (pack l l)) o", "REFUSE_AFFINE_REUSE");
+  ok &= domain("dup : Option Leaf ⊸ Option (Leaf × Leaf)\ndup o = map (λ l → pack l l) o", "REFUSE_AFFINE_REUSE");
+  ok &= domain("dup : Option Leaf ⊸ Option (Leaf × Leaf)\ndup o = bind o (λ l → some (pack l l))", "REFUSE_AFFINE_REUSE");
+  ok &= domain("keep : Option Leaf ⊸ Option Leaf\nkeep o = map (λ l → l) o", NULL);
+  ok &= domain("keep : Option Leaf ⊸ Option Leaf\nkeep o = option none (λ l → some l) o", NULL);
+  ok &= domain("dup : (A : Type 0) → A ⊸ Option (A × A)\ndup A x = map (λ y → pack y y) (some x)", "REFUSE_AFFINE_REUSE");
+  ok &= domain("many : (A : Type 0) → A → A × A\nmany A x = pack x x\ndup : (A : Type 0) → A ⊸ Option (A × A)\ndup A x = map (many A) (some x)", "TYPE_MISMATCH");
+  ok &= domain("inc : ℕ → ℕ\ninc n = natAdd n 1\nuse : Option ℕ → Option ℕ\nuse o = map inc o", NULL);
+  ok &= domain("dup : Leaf ⊸ Option (Leaf × Leaf)\ndup l = map (λ f → pack (f unit) (f unit)) (some (λ (u : Unit) → l))", "REFUSE_AFFINE_REUSE");
+  ok &= domain(SUM_DATA "dup : Sum Leaf ℕ → Sum Leaf ℕ × Sum Leaf ℕ\ndup s = pack s s", "REFUSE_AFFINE_OMEGA");
+  ok &= domain(SUM_DATA "dup : Sum Leaf ℕ ⊸ Option (Leaf × Leaf)\ndup s = fold (λ l → some (pack l l)) (λ n → none) s", "REFUSE_AFFINE_REUSE");
+  ok &= domain("data Box : Type where\n  boxed : (item : Leaf) → Box\n\ndup : Box → Box × Box\ndup b = pack b b", "REFUSE_AFFINE_OMEGA");
+  /* Erased laws remain available in types, but cannot smuggle their
+     erased inputs into an executable path application. */
+  ok &= domain("law : (@0 l : Leaf) → Path Leaf l l\nlaw l = refl\ndup : Leaf ⊸ Leaf × Leaf\ndup l = pack (law l i0) (law l i1)", "REFUSE_AFFINE_REUSE");
+  ok &= domain("law : (@0 n : ℕ) → Path ℕ n n\nlaw n = refl\nleak : (@0 n : ℕ) → ℕ\nleak n = law n i0", "REFUSE_AFFINE_REUSE");
+  ok &= domain("wrong : ℕ → ℕ\nwrong = λ (@0 n : ℕ) → n", "TYPE_MISMATCH");
+  ok &= domain("data Box : Type where\n  box : (@0 item : ℕ) → Box", "PARSE_CTOR_RESULT");
+  ok &= domain("data Box (@0 A : Type 0) : Type where\n  box : (item : A) → Box A", "PARSE_EXPECT");
+  ok &= domain("codata Stream (A : Type 0) : Type where\n  head : Stream A ⊸ A\n  tail : Stream A → Stream A", "PARSE_CTOR_RESULT");
+  ok &= domain("id : (A : Type 0) → A → A\nid A x = x\nuse : (@0 A : Type 0) → A → A\nuse A x = id A x", NULL);
+  ok &= domain("move : (@0 A : Type 0) → A → A\nmove A x = transp (λ (i : I) → A) i0 x", NULL);
+  ok &= domain("hold : (@0 A : Type 0) → Type 0 × ℕ\nhold A = pack A 0", NULL);
+  ok &= domain("codata Stream (A : Type 0) : Type where\n  head : Stream A → A\n  tail : Stream A → Stream A\n\nforged : Stream (Option Leaf)\nforged p = none", "REFUSE_SEALED");
+  ok &= domain("codata Stream (A : Type 0) : Type where\n  head : Stream A → A\n  tail : Stream A → Stream A\n\nempty : (A : Type 0) → Stream (Option A)\nempty A p = none\nforged : Stream (Option Leaf)\nforged = empty Leaf", "REFUSE_SEALED");
+  ok &= domain("data Durable (A : Type 0) : Type where\n  done : (doneOf : A) → Durable A\n  commit : (at : ℕ) → (cont : Durable A) → Durable A\n\ndup : Durable Leaf ⊸ Durable (Leaf × Leaf)\ndup d = fold (λ l → done (Leaf × Leaf) (pack l l)) (λ n r → commit (Leaf × Leaf) n r) d", "REFUSE_AFFINE_REUSE");
+  ok &= domain("keep : (A : Type 0) → Option A ⊸ Option A\nkeep A o = map (λ x → x) o", NULL);
+  ok &= domain("p : Path ℕ 1 1\np = refl\nn : ℕ\nn = p i0", NULL);
+  ok &= domain_dotted("codata Stream (A : Type 0) : Type where\n  head : Stream A → A\n  tail : Stream A → Stream A\n\nw : (@0 l : Leaf) → Path ℕ (head ℕ (Stream'corec ℕ Leaf (λ x → 0) (λ x → x) l)) 0\nw l = refl", "REFUSE_SEALED");
+  ok &= domain("idz : (@0 A : Type 0) → A → A\nidz A = λ (y : A) → y", NULL);
+  ok &= domain("law : (@0 l : Leaf) → Path Leaf l l\nlaw l = refl", NULL);
+  /* S3 U4b: omega positions (O-U4a-1). An argument at an omega binder, and
+     a closure that captures l and goes to one, use l at omega. The binder
+     of the closure counts for one call. */
+  ok &= domain("idMany : (A : Type 0) → A → A\nidMany A x = x\nspend : Leaf ⊸ Leaf\nspend l = idMany Leaf l", "REFUSE_AFFINE_OMEGA");
+  ok &= domain("apply : (Unit → Leaf) → Leaf\napply f = f unit\nspend : Leaf ⊸ Leaf\nspend l = apply (λ u → l)", "REFUSE_AFFINE_OMEGA");
+  /* S3 U7 (M2c): a λ at an inferred position (the head of an application,
+     here in a type) with a binder of a resource sort at omega is
+     REFUSE_AFFINE_OMEGA (infer_lam). */
+  ok &= domain("hold : (@0 l : Leaf) → Path ℕ ((λ (x : Leaf) → 0) l) 0\nhold l = refl", "REFUSE_AFFINE_OMEGA");
+  ok &= domain("apply1 : (Leaf ⊸ Leaf) → Leaf ⊸ Leaf\napply1 f l = f l\nspend : Leaf ⊸ Leaf\nspend l = apply1 (λ x → x) l", NULL);
+  /* S3 U4b: each arm of an eliminator starts from the same counts
+     (O-U4a-2); the split rule unpack (Q-S3-6 (a)). */
+  ok &= domain("pick : Bool → Leaf ⊸ Leaf\npick b l = flagIf b l l", NULL);
+  ok &= domain("pick : Bool → Leaf ⊸ Leaf × Leaf\npick b l = flagIf b (pack l l) (pack l l)", "REFUSE_AFFINE_REUSE");
+  ok &= domain("swap : Leaf × Leaf ⊸ Leaf × Leaf\nswap p = unpack p (λ a b → pack b a)", NULL);
+  ok &= domain("swap : Leaf × Leaf ⊸ Leaf × Leaf\nswap p = unpack p (λ a b → pack a a)", "REFUSE_AFFINE_REUSE");
+  /* S3 U5: a fold step runs one time for each layer (R2, O-U4b-2): a step
+     that uses a 1-variable is REFUSE_AFFINE_FIX; the z arm uses it one
+     time. */
+  ok &= domain("burn : Leaf ⊸ ℕ\nburn l = 0\nspend : Leaf ⊸ ℕ → ℕ\nspend l n = fold (λ r → burn l) 0 n", "REFUSE_AFFINE_FIX");
+  ok &= domain("burn : Leaf ⊸ ℕ\nburn l = 0\nspend : Leaf ⊸ ℕ → ℕ\nspend l n = fold (λ r → r) (burn l) n", NULL);
+  ok &= domain("data Stack : Type where\n  bottom : Stack\n  push : (top : ℕ) → (rest : Stack) → Stack\n\n"
+               "burn : Leaf ⊸ ℕ\nburn l = 0\nsize : Leaf ⊸ Stack → ℕ\nsize l s = fold 0 (λ t r → burn l) s", "REFUSE_AFFINE_FIX");
+  ok &= domain("data Stack : Type where\n  bottom : Stack\n  push : (top : ℕ) → (rest : Stack) → Stack\n\n"
+               "burn : Leaf ⊸ ℕ\nburn l = 0\nsize : Leaf ⊸ Stack → ℕ\nsize l s = fold (burn l) (λ t r → r) s", NULL);
+  /* S3 U5: both end points of a path hold its body (PLAN 4.2). A
+     1-variable under λ i → at 1, in refl at 1, or in transp at 1 is
+     REFUSE_AFFINE_PATH; a path with no 1-variable passes; the law at 0
+     stays legal (above). */
+  ok &= domain("hold : (@1 l : Leaf) → Path Leaf l l × ℕ\nhold l = pack (λ i → l) 0", "REFUSE_AFFINE_PATH");
+  ok &= domain("hold : (@1 l : Leaf) → Path Leaf l l × ℕ\nhold l = pack refl 0", "REFUSE_AFFINE_PATH");
+  ok &= domain("hold : (@1 l : Leaf) → Path ℕ 0 0 × ℕ\nhold l = pack (λ i → 0) 0", NULL);
+  ok &= domain("move : Leaf ⊸ Leaf\nmove l = transp (λ i → Leaf) i0 l", "REFUSE_AFFINE_PATH");
   /* S2 U6c2b: the walk D.walk and the private corecursor D.corec
      (Q-S2-U6c2-1 (a), reached through domain_dotted). The head of a
      corecursor stream is the seed observation; the tail applies the
@@ -326,6 +401,57 @@ int main(int argc, char **argv) {
                       "w : Path ℕ (Lab'walk ℕ (λ s e → e) (Lab'step'step 1 Lab'here) 0) 1\nw = refl", NULL);
   ok &= domain_dotted("codata Lab (A : Type 0) : Type where\n  hd : Lab A → A\n  step : Lab A → ℕ → Lab A\n\n"
                       "c : Path ℕ (hd ℕ (step ℕ (Lab'corec ℕ ℕ (λ s → s) (λ s e → e) 0) 4)) 4\nc = refl", NULL);
+  /* S3 U5 (R1): the binders of the corecursor are omega, so its body
+     passes at 1. A step that uses a 1-variable goes to an omega binder:
+     REFUSE_AFFINE_OMEGA (O-U5-1). */
+  ok &= domain_dotted("codata Stream (A : Type 0) : Type where\n  head : Stream A → A\n  tail : Stream A → Stream A\n\n"
+                      "burn : Leaf ⊸ ℕ\nburn l = 0\nst : Leaf ⊸ Stream ℕ\nst l = Stream'corec ℕ ℕ (λ s → s) (λ s → 9) 7", NULL);
+  ok &= domain_dotted("codata Stream (A : Type 0) : Type where\n  head : Stream A → A\n  tail : Stream A → Stream A\n\n"
+                      "burn : Leaf ⊸ ℕ\nburn l = 0\nst : Leaf ⊸ Stream ℕ\nst l = Stream'corec ℕ ℕ (λ s → s) (λ s → burn l) 7", "REFUSE_AFFINE_OMEGA");
+  /* S3 U6: a Durable (Q-S3-8 (a)) with an operation field that is not
+     closed is REFUSE_CELL. The head of a Stream is a run-time position
+     (PLAN 4.1). S3 U6b: the ruled Durable (Q-S3-10 (a): the recursive
+     field cont is the family at its own parameter) checks. Its payload
+     is a run-time position. A fold gives the motive to cont, and a
+     1-variable in the commit case is REFUSE_AFFINE_FIX (the done case
+     runs one time). A recursive field at other arguments, or in a
+     family with a value parameter, stays refused. */
+  ok &= domain("data Durable (A : Type 0) : Type where\n  done : (doneOf : A) → Durable A\n  commit : (at : ℕ) → (cont : Durable A) → Durable A", NULL);
+  ok &= domain("data Durable (A : Type 0) : Type where\n  done : (doneOf : A) → Durable A\n  commit : (at : ℕ) → (cont : Durable ℕ) → Durable A", "REFUSE_CELL");
+  ok &= domain("data Pile (size : ℕ) : Type where\n  base : (baseOf : ℕ) → Pile size\n  more : (on : ℕ) → (below : Pile size) → Pile size", "DOMAIN_FAMILY");
+  ok &= domain("data Durable (A : Type 0) : Type where\n  done : (doneOf : A) → Durable A\n  commit : (at : ℕ) → (cont : Durable A) → Durable A\n\n"
+               "f : Durable Leaf → ℕ\nf d = 0", "REFUSE_AFFINE_OMEGA");
+  ok &= domain("data Durable (A : Type 0) : Type where\n  done : (doneOf : A) → Durable A\n  commit : (at : ℕ) → (cont : Durable A) → Durable A\n\n"
+               "f : Durable Leaf ⊸ ℕ\nf d = 0", NULL);
+  ok &= domain("data Durable (A : Type 0) : Type where\n  done : (doneOf : A) → Durable A\n  commit : (at : ℕ) → (cont : Durable A) → Durable A\n\n"
+               "count : Durable ℕ → ℕ\ncount d = fold (λ (x : ℕ) → 0) (λ (k : ℕ) (n : ℕ) → natAdd n 1) d\n"
+               "two : Path ℕ (count (commit ℕ 1 (commit ℕ 2 (done ℕ 0)))) 2\ntwo = refl", NULL);
+  ok &= domain("data Durable (A : Type 0) : Type where\n  done : (doneOf : A) → Durable A\n  commit : (at : ℕ) → (cont : Durable A) → Durable A\n\n"
+               "burn : Leaf ⊸ ℕ\nburn l = 0\nspend : Leaf ⊸ Durable ℕ → ℕ\nspend l d = fold (λ (x : ℕ) → 0) (λ (k : ℕ) (n : ℕ) → burn l) d", "REFUSE_AFFINE_FIX");
+  ok &= domain("data Durable (A : Type 0) : Type where\n  done : (doneOf : A) → Durable A\n  commit : (at : ℕ) → (cont : Durable A) → Durable A\n\n"
+               "burn : Leaf ⊸ ℕ\nburn l = 0\nspend : Leaf ⊸ Durable ℕ → ℕ\nspend l d = fold (λ (x : ℕ) → burn l) (λ (k : ℕ) (n : ℕ) → n) d", NULL);
+  ok &= domain("data Durable (A : Type 0) : Type where\n  done : (doneOf : A) → Durable A\n  commit : (at : A) → (rest : Durable A) → Durable A", "REFUSE_CELL");
+  ok &= domain("data Durable (A : Type 0) : Type where\n  done : (doneOf : A) → Durable A\n  commit : (at : A → ℕ) → (rest : Durable A) → Durable A", "REFUSE_CELL");
+  ok &= domain_dotted("codata Stream (A : Type 0) : Type where\n  head : Stream A → A\n  tail : Stream A → Stream A\n\n"
+                      "f : Stream Leaf → ℕ\nf s = 0", "REFUSE_AFFINE_OMEGA");
+  ok &= domain_dotted("codata Stream (A : Type 0) : Type where\n  head : Stream A → A\n  tail : Stream A → Stream A\n\n"
+                      "f : Stream Leaf ⊸ ℕ\nf s = 0", NULL);
+  /* The sealed Keystore (Q-S3-7 (a)): head, tail or Stream'corec at a
+     resource sort opens or builds a Keystore, REFUSE_SEALED. */
+  ok &= domain_dotted("codata Stream (A : Type 0) : Type where\n  head : Stream A → A\n  tail : Stream A → Stream A\n\nKeystore : Type 0\nKeystore = Stream (Option Leaf)\n"
+                      "peek : Keystore ⊸ Option Leaf\npeek ks = head (Option Leaf) ks", "REFUSE_SEALED");
+  ok &= domain_dotted("codata Stream (A : Type 0) : Type where\n  head : Stream A → A\n  tail : Stream A → Stream A\n\nKeystore : Type 0\nKeystore = Stream (Option Leaf)\n"
+                      "adv : Keystore ⊸ Keystore\nadv ks = tail (Option Leaf) ks", "REFUSE_SEALED");
+  ok &= domain_dotted("codata Stream (A : Type 0) : Type where\n  head : Stream A → A\n  tail : Stream A → Stream A\n\nKeystore : Type 0\nKeystore = Stream (Option Leaf)\n"
+                      "mint : ℕ → Keystore\nmint n = Stream'corec (Option Leaf) ℕ (λ s → none) (λ s → s) n", "REFUSE_SEALED");
+  ok &= domain_dotted("codata Stream (A : Type 0) : Type where\n  head : Stream A → A\n  tail : Stream A → Stream A\n\nKeystore : Type 0\nKeystore = Stream (Option Leaf)\n"
+                      "peek2 : Stream Keystore ⊸ Keystore\npeek2 s = head Keystore s", "REFUSE_SEALED");
+  ok &= domain_dotted("codata Stream (A : Type 0) : Type where\n  head : Stream A → A\n  tail : Stream A → Stream A\n\nKeystore : Type 0\nKeystore = Stream (Option Leaf)\n"
+                      "keep : Keystore ⊸ Keystore\nkeep ks = ks", NULL);
+  ok &= domain_dotted("codata Stream (A : Type 0) : Type where\n  head : Stream A → A\n  tail : Stream A → Stream A\n\nKeystore : Type 0\nKeystore = Stream (Option Leaf)\n"
+                      "f : Keystore → ℕ\nf ks = 0", "REFUSE_AFFINE_OMEGA");
+  ok &= domain_dotted("codata Stream (A : Type 0) : Type where\n  head : Stream A → A\n  tail : Stream A → Stream A\n\n"
+                      "h : Stream ℕ → ℕ\nh s = head ℕ s", NULL);
   ok &= domain("codata Z (A : Type 0) : Type where\n  zt : Z A → Z A", "REFUSE_CELL");
   /* Public cofield names cannot collide with private elaboration names. */
   ok &= domain("codata C (A : Type 0) : Type where\n  hd : C A → A\n  here : C A → C A", NULL);

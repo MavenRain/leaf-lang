@@ -1,0 +1,2 @@
+-- A multiplicity mark is @0 or @1.
+f : (@2 x : Nat) → Nat

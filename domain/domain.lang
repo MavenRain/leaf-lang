@@ -65,3 +65,20 @@ idEquiv A = pack (λ x → x) (λ y → pack (pack y refl) (λ z i → pack (pay
 
 ua : (A : Type 0) → (B : Type 0) → Equiv A B → Path (Type 0) A B
 ua A B e i = Glue B [ ~ i ↦ pack A e , i ↦ pack B (idEquiv B) ]
+
+-- The signer effect (S3, Q-S3-8 (a), Q-S3-10 (a)): the free cell monad of
+-- one operation. A commit node writes the next leaf index before its
+-- continuation runs.
+data Durable (A : Type 0) : Type where
+  done : (doneOf : A) → Durable A
+  commit : (at : ℕ) → (cont : Durable A) → Durable A
+
+-- A stream (S3, Q-S3-7 (a)): a cocell comonad with the observation head.
+codata Stream (A : Type 0) : Type where
+  head : Stream A → A
+  tail : Stream A → Stream A
+
+-- The keystore (S3, Q-S3-7 (a)) is sealed: a term that opens it (head or
+-- tail at Keystore) or builds it (the private corecursor) is REFUSE_SEALED.
+Keystore : Type 0
+Keystore = Stream (Option Leaf)

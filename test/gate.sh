@@ -249,8 +249,8 @@ if ! cmp -s test/json/expect.txt "$tmp/json.txt"; then
 fi
 # The progress line: typed "k of m" with k < m (a later declaration fails),
 # and an all-pass file.
-for want in 'progress-part:{"parsed":"3 of 3","typed":"2 of 3","affine":"0 of 0","laws":"0 of 0"}' \
-  'progress-pass:{"parsed":"2 of 2","typed":"2 of 2","affine":"0 of 0","laws":"0 of 0"}'; do
+for want in 'progress-part:{"parsed":"3 of 3","typed":"2 of 3","affine":"2 of 3","laws":"0 of 0"}' \
+  'progress-pass:{"parsed":"2 of 2","typed":"2 of 2","affine":"2 of 2","laws":"0 of 0"}'; do
   got=$(build/langc check --json "test/json/${want%%:*}.lang" 2>/dev/null | tail -n 1) || true
   [ "$got" = "${want#*:}" ] || { echo "FAIL progress ${want%%:*}: want ${want#*:}, got $got"; fail=$((fail + 1)); }
 done

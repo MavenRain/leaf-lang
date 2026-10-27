@@ -1,0 +1,2 @@
+burn : Leaf → Unit
+burn l = unit

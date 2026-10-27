@@ -233,14 +233,15 @@ static void noncanon(Arena *arena, const char *path, const char *text, size_t le
 
 /* The last line of `check --json`. The count is the number of program
    declarations: after a parse failure, the complete ones and the failed
-   one; after a lex failure, 0. */
+   one; after a lex failure, 0. The use count runs in the same pass as
+   the types, so `affine` is the `typed` count (Q-S3-9 (a)). */
 static void print_progress(const Front *front, const Machine *machine, int parsed, int typed, FILE *out) {
   size_t done = front->lexed ? front->decls.count - front->domain_count : 0;
   size_t count = done + (size_t)(front->lexed && !parsed);
   size_t checked = machine->checked > front->domain_count ? machine->checked - front->domain_count : 0;
   size_t ok = typed ? count : parsed ? checked : 0;
-  fprintf(out, "{\"parsed\":\"%zu of %zu\",\"typed\":\"%zu of %zu\",\"affine\":\"0 of 0\",\"laws\":\"0 of 0\"}\n",
-          done, count, ok, count);
+  fprintf(out, "{\"parsed\":\"%zu of %zu\",\"typed\":\"%zu of %zu\",\"affine\":\"%zu of %zu\",\"laws\":\"0 of 0\"}\n",
+          done, count, ok, count, ok, count);
 }
 
 /* `check` in both modes: the error (at most one), then the W_NONCANON

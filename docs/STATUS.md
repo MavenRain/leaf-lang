@@ -157,3 +157,116 @@ All are killed. Sites C1 to C3 are in src/front/check.c.
   ruled. The default is (a): `D.corec` is private.
 - The bisimulation is not built. It needs a dependent `elim` over `D.pos`,
   which is a new rule and a name that programs see (R7 (c)).
+
+## S3: affine layer
+
+S3 (2026-10-26) adds the affine layer (PLAN section 4, section 9 S3 row).
+
+- Multiplicities: each binder has 0, 1 or omega. The surface marks are
+  `(@0 x : A) → B` and `(@1 x : A) → B`; a binder with no mark is omega
+  (Q-S3-1 (a)). `A ⊸ B` is `(@1 _ : A) → B`, and `-o` is an alias with
+  `W_NONCANON` (Q-S3-2 (a)). `⊸` and `→` do not convert, and a closure
+  type has no multiplicity bit (Q-S3-3 (a)).
+- The check counts the uses of each variable on one evaluation path. The
+  eliminators `option`, `flagIf`, `fold`, `witness` and `payload` start
+  each arm from the same use set and take the maximum. The split rule
+  `unpack p (λ a b → t)` uses `p` one time and binds `a` and `b` at 1
+  (Q-S3-6 (a)). A definition whose type ends in `Path`, `PathP` or a
+  universe is checked at 0; each other definition is checked at 1
+  (Q-S3-5 (a)).
+- Resource sorts: `Leaf` (a core base type with no constructor and no
+  eliminator) and `Keystore` (Q-S3-7 (a)). A variable of a resource type
+  has multiplicity 0 or 1. A JSON record gives `affine` as `"k of m"`
+  (Q-S3-9 (a)).
+- Five refusal codes (PLAN 4.2), each with a row and a JSON fixture in
+  docs/DIAGNOSTICS.md: `REFUSE_AFFINE_REUSE`, `REFUSE_AFFINE_OMEGA`,
+  `REFUSE_AFFINE_FIX`, `REFUSE_AFFINE_PATH` and `REFUSE_SEALED`.
+  docs/DIAGNOSTICS.md has 46 codes (S2: 41).
+- `Durable A` is a CM in domain/domain.lang: `done : (doneOf : A) →
+  Durable A` and `commit : (at : ℕ) → (cont : Durable A) → Durable A`
+  (Q-S3-8 (a), Q-S3-10 (a)). In a family with type parameters, a
+  recursive field at the own parameters is whole, and each constructor
+  has at most one (a spine, O-U6b-1 (a)). A `fold` over a `Durable` runs
+  in `langc eval` and in Wasm as a run-time walk of the spine.
+- `Stream A` is a codata in domain/domain.lang (`head`, `tail`).
+  `Keystore = Stream (Option Leaf)` is sealed: a codata line or `D.corec`
+  at a type argument with a resource sort in it is `REFUSE_SEALED`, at
+  each origin and multiplicity (O-U6-1 (a)).
+- A `D.corec` step that uses a 1-variable is `REFUSE_AFFINE_OMEGA`, not
+  `REFUSE_AFFINE_FIX`: the generated corecursor binders are omega
+  (O-U5-1 (a)).
+
+Gate counts (`make check`): examples 10 checked, 0 failed; parse refusals
+12; check refusals 35; evals 70; ir 10 lowered; wasm 13 modules valid;
+differential 773 cases, 0 mismatches; fmt 91 canonical, 6 non-canonical
+pairs; json 33 fixtures; diagnostics 46 codes, 31 with a fixture, 15 with
+no fixture; gate 0 failures; review and domain regressions passed.
+
+### Mutants
+
+All 14 are killed. Each site is in src/front/check.c. M1 to M5c are the
+five S3 refusals; M6 and M7 are the two `Durable` branches of the family
+check.
+
+| Mutant | Site | Edit | Killer |
+|---|---|---|---|
+| M1 | `use_local` | a second use of a 1-variable passes | json `REFUSE_AFFINE_REUSE`; fronttool rows `pick`, `swap` |
+| M2 | `use_local` | a 1-variable at an omega position is not refused | fronttool rows `idMany`, `apply`, the `Stream'corec` step |
+| M2b | `elab_binder` | a Pi binder of a resource type at omega is not refused | json `REFUSE_AFFINE_OMEGA`; fronttool rows `keep`, the `Durable` payload, the `Stream` head |
+| M2c | `infer_lam` | an annotated λ of a resource type at omega is not refused | fronttool row `hold` (U7) |
+| M3 | `fold_family` | a recursive case that uses a 1-variable passes | fronttool rows `Stack` `size`, `Durable` `spend` |
+| M3b | `fold_simple` | a `fold` step over `ℕ` that uses a 1-variable passes | json `REFUSE_AFFINE_FIX`; fronttool row `ℕ` `spend` |
+| M4 | `refl_free` | a 1-variable in the end point of `refl` passes | fronttool row `pack refl 0` |
+| M4b | `path_rule` | the path rules (`transp`, `hcomp`, `Glue` and the derived rules) do not refuse | fronttool row `move` (`transp`) |
+| M4c | `check_plam` | `λ i →` at 1 does not refuse | json `REFUSE_AFFINE_PATH`; fronttool row `pack (λ i → l) 0` |
+| M5 | `opens_codata` | no codata line and no `D.corec` opens a codata | json `REFUSE_SEALED`; fronttool rows `peek`, `adv`, `mint` |
+| M5b | `pos_family` | a `Stream` of a resource sort is not a resource type | fronttool rows `f : Stream Leaf → ℕ`, `f : Keystore → ℕ`, `peek2` (U8) |
+| M5c | `apply_term` | a codata line at a resource type argument passes | json `REFUSE_SEALED`; fronttool rows `peek`, `adv`, `mint` |
+| M6 | `check_field` | a recursive field at the own parameters is refused | fronttool row `Durable` (admitted) |
+| M7 | `check_ctor` | two recursive fields at the own parameters pass | fronttool S2 row `Fm A` (`DOMAIN_FAMILY`) |
+
+### Staged S3 review fixes (2026-10-26)
+
+- Eliminator payloads and folded results keep affine binders when their
+  types contain resources, are polymorphic, or can be closures carrying
+  resources. Concrete resource-free payloads keep the existing omega
+  handlers. The checks cover `option`, `map`, `bind` and both `fold` forms.
+- Resource classification inspects instantiated constructor fields of
+  every domain family, including `Sum` and closed resource wrappers.
+- Erased laws still check at 0. A separate check at 1 records whether a
+  runtime reference is safe, so applying a law at `i0` or `i1` cannot
+  recover an erased input. Type arguments and family parameters check
+  at 0, including arguments passed to an omega type binder.
+- A normalized lambda cannot construct a resource stream, including
+  through a polymorphic builder. The codata guard checks every type
+  argument, including the private corecursor's seed type.
+- Explicit lambda marks must match the expected binder. Family
+  parameters, constructor fields and codata observations reject marks
+  that their syntax representation cannot retain.
+
+All added regressions in test/fronttool.c pass. The full `make check`
+gate passes with the counts above. The original staged gate and JSON
+diagnostic checks were retained.
+
+### Open items from S3
+
+- Trees at the own parameters (O-U6b-1 (a)): a family with type
+  parameters has at most one recursive field in each constructor. The S2
+  row `Fm A` (two recursive fields) stays `DOMAIN_FAMILY`, and lower.c
+  lowers only a spine (`REFUSE_RUNTIME_TREE`). Trees are a later slice
+  item.
+- `opens_codata` matches by name (a codata line, or `D.corec`), and
+  `pos_family` matches by the `.pos` suffix. Both are generic over each
+  codata (O-U6-3).
+- The generated codata destructors bind the stream at omega, so a
+  1-stream cannot be observed. No S3 rule needs it: the core opens a
+  `Keystore` in S5 (O-U6-4).
+- `core_free` shifts the index only under `CORE_LAM`, `CORE_PI` and
+  `CORE_SIGMA`. It assumes that no Op binds a variable itself. This is
+  not checked against each Op (O-U5-2).
+- `transp` over a constant line refuses one use of a 1-variable, as the
+  PLAN 4.2 rule is written. Over a constant line `transp` gives the
+  value, one use, so the rule is too strict there (O-U5-3).
+- `path_rule` covers `symm`, `trans`, `cong` and `transport` (each one
+  elaborates to `λ i →` or to `transp`, PLAN 3). Only `transp` has a test
+  (O-U5-4).

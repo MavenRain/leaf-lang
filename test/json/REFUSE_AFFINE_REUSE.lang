@@ -1,0 +1,2 @@
+dup : Leaf ⊸ Leaf × Leaf
+dup l = pack l l

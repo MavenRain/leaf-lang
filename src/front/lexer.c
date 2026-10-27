@@ -40,6 +40,7 @@ static const struct {
   {"\xE2\x86\x92", TOK_ARROW},
   {"\xCE\xBB", TOK_LAMBDA},
   {"\xC3\x97", TOK_TIMES},
+  {"\xE2\x8A\xB8", TOK_LOLLI},
   {"\xE2\x88\xA7", TOK_MEET},
   {"\xE2\x88\xA8", TOK_JOIN},
   {"\xE2\x86\xA6", TOK_MAPSTO},
@@ -62,6 +63,8 @@ const char *tok_kind_name(TokKind kind) {
     case TOK_FATARROW: return "'=>'";
     case TOK_TIMES: return "'×'";
     case TOK_LAMBDA: return "'λ'";
+    case TOK_LOLLI: return "'⊸'";
+    case TOK_MARK: return "a multiplicity mark";
     case TOK_KW_REC: return "'rec'";
     case TOK_KW_FUN: return "'fun'";
     case TOK_KW_DATA: return "'data'";
@@ -267,7 +270,13 @@ static int lex_symbol(Lexer *lx) {
       width = next == '=' ? 2 : 1;
       break;
     case '-':
-      kind = next == '>' ? TOK_ARROW : TOK_EOF;
+      /* `-o` is the alias of ⊸ only when no name character follows, so
+         `-ops` is not `⊸ ps`. */
+      kind = next == '>' ? TOK_ARROW : next == 'o' && !is_ident_char(peek(lx, 2)) ? TOK_LOLLI : TOK_EOF;
+      width = 2;
+      break;
+    case '@':
+      kind = (next == '0' || next == '1') && !is_ident_char(peek(lx, 2)) ? TOK_MARK : TOK_EOF;
       width = 2;
       break;
     case '=':
@@ -282,7 +291,7 @@ static int lex_symbol(Lexer *lx) {
                         "%s:%d:%d: unexpected byte 0x%02x", lx->source, line, col, (unsigned)(unsigned char)c);
   }
   advance(lx, width);
-  push(lx, kind, start, line, col);
+  push(lx, kind, start, line, col)->nat = kind == TOK_MARK ? (uint64_t)(next - '0') : 0;
   return 1;
 }
 

@@ -1,0 +1,27 @@
+-- Multiplicity marks and the affine arrow: @0, @1, ⊸ and the alias -o.
+consume : Nat -o Nat
+consume x = x
+
+first : Nat -o Nat -o Nat
+first a b = a
+
+keepOne : (@1 x : Nat) -> (@0 y : Nat) -> Nat
+keepOne x y = x
+
+shared : (@1 a b : Nat) -> Nat ⊸ Nat
+shared a b c = c
+
+once : Nat ⊸ Nat
+once = \ (@1 n : Nat) -> n
+
+pick : Nat -> Nat -o Nat
+pick = \ x (@1 y : Nat) -> y
+
+drop : (@0 n : Nat) -> Nat -> Nat
+drop = \ (@0 n : Nat) m -> m
+
+marked : (@1 n : Nat) * Nat
+marked = pack 1 2
+
+apply : (Nat -o Nat) -> Nat
+apply g = g 1

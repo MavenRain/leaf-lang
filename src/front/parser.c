@@ -41,10 +41,12 @@ typedef struct {
   int stop;
 } Parser;
 
-/* One binder group: `(x y : A)` gives two names that share one type. */
+/* One binder group: `(x y : A)` gives two names that share one type.
+   `(@1 x y : A)` gives the two names one multiplicity. */
 typedef struct {
   const char **names;
   size_t count;
+  Mult mult;
   const Term *type;
   const Token *tok;
 } Binders;
@@ -157,6 +159,7 @@ static Term *make_term(Parser *p, TermKind kind, int line, int col) {
   term->kind = kind;
   term->line = line;
   term->col = col;
+  term->mult = MULT_OMEGA;
   return term;
 }
 
@@ -192,6 +195,8 @@ static int starts_atom(TokKind kind) {
     case TOK_FATARROW:
     case TOK_TIMES:
     case TOK_LAMBDA:
+    case TOK_LOLLI:
+    case TOK_MARK:
     case TOK_KW_REC:
     case TOK_KW_FUN:
     case TOK_KW_DATA:
@@ -209,10 +214,11 @@ static int starts_atom(TokKind kind) {
   return 0;
 }
 
-/* `(` NAME+ `:` starts a binder group. `(f x)` does not. */
+/* `(` [MARK] NAME+ `:` starts a binder group. `(f x)` does not. */
 static int at_binder_group(const Parser *p) {
-  if (!at(p, TOK_LPAREN) || peek_at(p, 1)->kind != TOK_IDENT) return 0;
-  size_t ahead = 2;
+  size_t first = peek_at(p, 1)->kind == TOK_MARK ? 2 : 1;
+  if (!at(p, TOK_LPAREN) || peek_at(p, first)->kind != TOK_IDENT) return 0;
+  size_t ahead = first + 1;
   while (peek_at(p, ahead)->kind == TOK_IDENT) ahead++;
   return peek_at(p, ahead)->kind == TOK_COLON;
 }
@@ -220,6 +226,8 @@ static int at_binder_group(const Parser *p) {
 static int parse_group(Parser *p, Binders *out) {
   out->tok = cur(p);
   if (!expect(p, TOK_LPAREN, "'('")) return 0;
+  const Token *mark = cur(p);
+  out->mult = !eat(p, TOK_MARK) ? MULT_OMEGA : mark->nat == 1 ? MULT_ONE : MULT_ZERO;
   size_t start = p->pos;
   while (at(p, TOK_IDENT)) bump(p);
   out->count = p->pos - start;
@@ -242,6 +250,7 @@ static int parse_bare(Parser *p, Binders *out) {
   if (out->names == NULL) return oom(p);
   out->names[0] = take_name(p, "a binder");
   out->count = 1;
+  out->mult = MULT_OMEGA;
   out->type = NULL;
   return out->names[0] != NULL;
 }
@@ -253,6 +262,7 @@ static const Term *wrap(Parser *p, TermKind kind, const Binders *b, const Term *
     Term *node = make_term(p, kind, b->tok->line, b->tok->col);
     if (node == NULL) return NULL;
     node->name = b->names[i - 1];
+    node->mult = b->mult;
     node->left = b->type;
     node->right = acc;
     acc = node;
@@ -428,6 +438,8 @@ static const Term *parse_atom(Parser *p) {
     case TOK_FATARROW:
     case TOK_TIMES:
     case TOK_LAMBDA:
+    case TOK_LOLLI:
+    case TOK_MARK:
     case TOK_KW_REC:
     case TOK_KW_FUN:
     case TOK_KW_DATA:
@@ -458,11 +470,12 @@ static const Term *parse_app(Parser *p) {
   return head;
 }
 
-/* A non-dependent `A → B` or `A × B` at the operator OP. */
+/* A non-dependent `A → B`, `A ⊸ B` or `A × B` at the operator OP. */
 static const Term *make_binary(Parser *p, TermKind kind, const Token *op, const Term *left, const Term *right) {
   Term *node = right == NULL ? NULL : make_term(p, kind, op->line, op->col);
   if (node == NULL) return NULL;
   node->name = NULL;
+  node->mult = op->kind == TOK_LOLLI ? MULT_ONE : MULT_OMEGA;
   node->left = left;
   node->right = right;
   return node;
@@ -524,7 +537,7 @@ static const Term *parse_prod(Parser *p) {
 static const Term *parse_term_body(Parser *p) {
   if (at(p, TOK_LAMBDA) || at(p, TOK_KW_FUN)) return parse_lambda(p);
   const Term *head = parse_prod(p);
-  if (head == NULL || !at(p, TOK_ARROW)) return head;
+  if (head == NULL || (!at(p, TOK_ARROW) && !at(p, TOK_LOLLI))) return head;
   const Token *op = cur(p);
   bump(p);
   return make_binary(p, TERM_PI, op, head, parse_term(p));
@@ -543,6 +556,7 @@ static int parse_fields(Parser *p, const Field **out, size_t *out_count) {
   while (at_binder_group(p)) {
     Binders b;
     if (!parse_group(p, &b)) return 0;
+    if (b.mult != MULT_OMEGA) return fail_at(p, b.tok, "an unmarked family parameter");
     for (size_t i = 0; i < b.count; i++) {
       items = grow(p, items, count, &cap, sizeof *items);
       if (items == NULL) return 0;
@@ -608,7 +622,7 @@ static int parse_clause(Parser *p, Decl *d) {
   p->stop = 1;
   size_t start = p->pos;
   while (at(p, TOK_IDENT)) bump(p);
-  Binders b = {NULL, p->pos - start, NULL, &p->toks[start]};
+  Binders b = {NULL, p->pos - start, MULT_OMEGA, NULL, &p->toks[start]};
   b.names = b.count == 0 ? NULL : arena_alloc(p->arena, b.count * sizeof *b.names);
   if (b.count > 0 && b.names == NULL) return oom(p);
   for (size_t i = 0; i < b.count; i++) {
@@ -667,6 +681,7 @@ static int split_ctor(Parser *p, const Decl *d, Ctor *ctor, const Term *type, si
   size_t count = 0;
   const Term *t = type;
   while (t->kind == TERM_PI && t->name != NULL) {
+    if (t->mult != MULT_OMEGA) return ctor_fail(p, ctor, type_start, "an unmarked field", "has a multiplicity mark on a constructor field");
     count++;
     t = t->right;
   }
@@ -698,7 +713,7 @@ static int split_obs(Parser *p, const Decl *d, Ctor *ctor, const Term *type, siz
   applied_name(d, self, sizeof self);
   char why[320];
   snprintf(why, sizeof why, "must start with %s →", self);
-  if (type->kind != TERM_PI || type->name != NULL || !ctor_result_ok(d, type->left)) return ctor_fail(p, ctor, type_start, self, why);
+  if (type->kind != TERM_PI || type->mult != MULT_OMEGA || type->name != NULL || !ctor_result_ok(d, type->left)) return ctor_fail(p, ctor, type_start, self, why);
   Field *field = arena_alloc(p->arena, sizeof *field);
   if (field == NULL) return oom(p);
   field->name = ctor->name;
@@ -772,6 +787,8 @@ static int parse_decl_body(Parser *p, Decl *d) {
     case TOK_FATARROW:
     case TOK_TIMES:
     case TOK_LAMBDA:
+    case TOK_LOLLI:
+    case TOK_MARK:
     case TOK_KW_FUN:
     case TOK_KW_WHERE:
     case TOK_KW_TYPE:

@@ -150,18 +150,18 @@ parameters.
 | Former | Use in leaf-lang | Class | Reason |
 |---|---|---|---|
 | Pi, `A -> B` | every function; vectors `Fin n -> Digest` | ambient | LCC |
-| `A -o B` | at-most-once function (section 4) | ambient | Pi with multiplicity 1 on the binder |
+| `A -o B` | at-most-once function (section 4) | ambient | Pi with multiplicity 1 on the binder: `(@1 _ : A) -> B`, surface `A ⊸ B` (Q-S3-2 (a), 7.1); `A -o B` and `A -> B` do not convert (Q-S3-3 (a)) |
 | Sigma, `(x : A) × B` | `Sig`, `PubKey`, `Tweak`, `Params` | ambient | each is a top-level definition of an iterated anonymous Sigma type; there is no `record` form (S2-Q3 (b)) |
-| `A * B` at multiplicity 1 | `Leaf * Keystore` | ambient | Sigma with multiplicity 1 |
+| `A * B` at multiplicity 1 | `Leaf * Keystore` | ambient | Sigma with multiplicity 1; `witness` and `payload` each use the pair one time, so the split rule `unpack p (λ a b → t)` gives both halves at 1 (Q-S3-6 (a), S3) |
 | `Fin n` | positions in a vector | defined | `Sigma (k : Nat), Path Bool (lt k n) true`; in leaf `Fin n = (k : ℕ) × Path Bool (lt k n) true` with `lt k n = natLe (natAdd k 1) n`, both defs in `domain/domain.lang` (S2 U7; no new builtin or rule) |
 | vectors | WOTS+ signature, auth path, chain ends | ambient | `Fin n -> Digest`, no new former |
 | `Path`, `PathP`, `I`, `transp`, `hcomp` | laws and proofs | ambient | the identity type of Cubical TT |
 | `U`, `Glue`, `ua` | universes; no leaf-lang use yet | ambient | kept as in the precedent |
 | `Option A` | `next` on an empty keystore | CM | one 0-cell `none`, generator `some` |
 | `Sum A B` | kept from the kit (S2-Q2 (b)); a domain family since S2 U6b2 | CM | declared in `domain/domain.lang` as `data Sum (A : Type 0) (B : Type 0)`; generators `inl : (inlOf : A) → Sum A B` and `inr : (inrOf : B) → Sum A B`, one for each type parameter; the eliminator is `fold` (S2 R1 (b): no `either`, no Sum monad) |
-| `Durable A` | the signer effect (commit-before-sign) | CM | generator `done : A -> Durable A`; one operation `commit : Nat -> Durable A -> Durable A` with closed data `Nat` (the free cell monad of one operation, as mandate-lang 4.6) |
+| `Durable A` | the signer effect (commit-before-sign) | CM | declared in `domain/domain.lang` as `data Durable (A : Type 0)` (S3, Q-S3-8 (a)); generator `done : (doneOf : A) → Durable A`; one operation `commit : (at : ℕ) → (cont : Durable A) → Durable A` with closed data `ℕ` and `cont` the family at its own parameter (field name Q-S3-10 (a)) (the free cell monad of one operation, as mandate-lang 4.6); `commit` is public in S3, and S5 decides if a program can build a `commit` node |
 | `Trunc A` | "a valid signature exists" in laws | CM | one 1-cell `squash` |
-| `Stream A` | the keystore reading (section 4.3) | CC | observation `head : Stream A -> A`, field `tail : Stream A -> Stream A` (shape check S2 U6c1; D, the private D.pos and the destructors S2 U6c2a; the private walk D.walk and corecursor D.corec S2 U6c2b; the bisimulation is deferred: it needs a dependent elim over D.pos, S2-HANDOFF R7) |
+| `Stream A` | the keystore reading (section 4.3) | CC | a codata in `domain/domain.lang` (S3, Q-S3-7 (a)); observation `head : Stream A -> A`, field `tail : Stream A -> Stream A` (shape check S2 U6c1; D, the private D.pos and the destructors S2 U6c2a; the private walk D.walk and corecursor D.corec S2 U6c2b; the bisimulation is deferred: it needs a dependent elim over D.pos, S2-HANDOFF R7) |
 | cons `List A` | none | REFUSED | `cons : A -> List A -> List A` uses `A` outside the generator; vectors over `Fin` do the work |
 | `Bag A`, free monoid | none | not admitted | no bullet needs a multiset or a sequence of unknown length |
 | `Either E A` | none | not admitted | errors are `Option` or `Bool`; no bullet needs an error payload |
@@ -258,8 +258,8 @@ its type), law (a guest theorem, section 6).
 | `PubKey` | defined | iterated Sigma: `root`, `pubSeed`, `params` | B1, B2 | S4 |
 | `Sig` | defined | iterated Sigma: `index : Nat`, `rand : Digest`, `wots : Fin len -> Digest`, `auth : Fin h -> Digest` | B1, B2 | S4 |
 | `verify` | defined | `PubKey -> Digest -> Sig -> Bool` | B1, B2 | S4 |
-| `Leaf` | resource | one unused one-time key; sealed: only `next` makes one (`REFUSE_SEALED`) | B4 | S3 |
-| `Keystore` | resource | the secret seeds, the public key and the signing position; sealed | B4, R4 (EIP-8310) | S3 |
+| `Leaf` | resource | one unused one-time key; a core base type with no constructor and no eliminator in S3 (Q-S3-7 (a)); sealed: only `next` makes one (`REFUSE_SEALED`) | B4 | S3 |
+| `Keystore` | resource | the secret seeds, the public key and the signing position; a sealed domain definition `Stream (Option Leaf)` (Q4 (a), Q-S3-7 (a)); a program that unfolds it (a `Stream` observation or `D.corec` at `Keystore`) gets `REFUSE_SEALED` | B4, R4 (EIP-8310) | S3 |
 | `Durable` | CM (domain) | section 2.2 | B4 (commit-before-sign) | S3 |
 | `keygen` | base op | `Digest -> Digest -> Digest -> Params -> Keystore` (secret seed, PRF seed, public seed) | B1, B4 | S5 |
 | `publicKey` | base op | `Keystore -o PubKey * Keystore` | B1, B2 | S5 |
@@ -318,23 +318,52 @@ The kit `Sum` former is not in the row above. S2 U6b2 moved it to
   resource type has multiplicity 0 or 1.
 - Weakening is allowed: a program can drop a leaf. A dropped leaf wastes
   capacity and never weakens security. Contraction is refused.
-- The arrow has a multiplicity bit (brisk amendment D1): `A -> B` is
-  unrestricted and `A -o B` is at most once. A closure that captures a
-  1-variable has type `A -o B`.
+- `A -o B` is `(@1 _ : A) -> B`: a Pi with multiplicity 1 on the binder
+  (Q-S3-3 (a), the QTT reading of Q3 (a)). `A -> B` is a Pi with an omega
+  binder. A closure type has no multiplicity bit: each use of the closure
+  scales the uses of its captures. `A -o B` and `A -> B` do not convert
+  (`TYPE_MISMATCH`); v1 has no subsumption.
 - A `match` uses its scrutinee once. All arms start from the same use set.
   The result use set is the maximum of the arms (brisk variants rule).
+  leaf-lang has no `match` form: the rule applies to the eliminators
+  `option`, `flagIf`, `fold`, `witness` and `payload`. The split rule
+  `unpack p (λ a b → t)` uses `p` one time and binds `a` and `b` at 1
+  (Q-S3-6 (a)).
 - Types are checked at multiplicity 0, so `Path Leaf l l` in a type uses
-  nothing. Laws quantify over leaves at 0 and never run.
+  nothing. Laws quantify over leaves at 0 and never run. A definition
+  whose type ends in `Path`, `PathP` or a universe (a law, a proof or a
+  type) is checked at 0; each other definition is checked at 1
+  (Q-S3-5 (a)).
+- A 0-variable in a run-time position is a use above its multiplicity:
+  `REFUSE_AFFINE_REUSE` with the message "used 1, allowed 0"
+  (Q-S3-4 (a)).
+
+- Eliminator payload binders are affine when their type contains a
+  resource, is polymorphic, or is a function that may capture one.
+  Concrete resource-free payloads retain omega handlers. This applies
+  to `option`, `map`, `bind` and the fields and results passed to `fold`
+  cases. Resource classification examines instantiated fields of every
+  domain family, including `Sum` and closed resource wrappers.
+- A definition checked at 0 can be referenced in executable code only
+  when its body also checks at 1. An unsafe erased proof cannot reveal
+  its inputs through path application. Type arguments and family
+  parameters are checked at 0.
+- Explicit lambda marks must match the expected binder multiplicity.
+  Domain family parameters, constructor fields and codata observations
+  reject marks that their syntax representation cannot retain.
+- Resource stream construction is sealed even when its normal form is
+  a lambda produced by a polymorphic builder. The codata guard checks
+  every type argument, including the private corecursor's seed type.
 
 ### 4.2 Refusal codes (`langc check --json`)
 
 | Code | Refuses |
 |---|---|
-| `REFUSE_AFFINE_REUSE` | a 1-variable used two times on one evaluation path |
-| `REFUSE_AFFINE_OMEGA` | a resource value or an `A -o B` value passed where an omega binder or an unrestricted arrow is expected |
-| `REFUSE_AFFINE_FIX` | a recursive binder or a corecursive `cofamily` unfold that captures a 1-variable (each unfolding would use it again) |
+| `REFUSE_AFFINE_REUSE` | a variable used more times than its multiplicity on one evaluation path: a 1-variable used two times, or a 0-variable in a run-time position (Q-S3-4 (a)) |
+| `REFUSE_AFFINE_OMEGA` | a term that uses a 1-variable (a resource value, or a closure that captures one) at an omega position, or a binder of a resource type at omega (Q-S3-3 (a)); a `fold` step is `REFUSE_AFFINE_FIX`, but a `D.corec` step that uses a 1-variable is `REFUSE_AFFINE_OMEGA`, because the generated corecursor binders are omega (O-U5-1 (a)) |
+| `REFUSE_AFFINE_FIX` | a `fold` step, or the case of a constructor with a recursive field, that uses a 1-variable (the step runs one time for each layer, so each unfolding would use it again); a `D.corec` step is `REFUSE_AFFINE_OMEGA` (O-U5-1 (a)) |
 | `REFUSE_AFFINE_PATH` | a 1-variable free under an interval binder `<i>`, or in `transp`, `hcomp` or `Glue` at multiplicity 1 (both end points would hold it) |
-| `REFUSE_SEALED` | a program that builds or opens a `Leaf` or a `Keystore` outside the domain |
+| `REFUSE_SEALED` | a program that builds or opens a `Leaf` or a `Keystore` outside the domain; in S3, a program that unfolds `Keystore` (a `Stream` observation or `D.corec` at `Keystore`, Q-S3-7 (a)); the check refuses a codata line or `D.corec` at each type argument with a resource sort in it (`Leaf` or `Keystore` as a head type, at each origin and multiplicity), not only at a type that converts with `Keystore` (O-U6-1 (a)) |
 
 Each code has a JSON record: `code`, `span`, `expected`, `found`, `fix`
 and `retry` (section 7).
@@ -364,7 +393,7 @@ before it runs the continuation.
 | brisk | leaf-lang |
 |---|---|
 | Unr below Aff, two points | three multiplicities: Cubical TT needs 0 for types and proofs |
-| D1: one multiplicity bit on the arrow | kept: `A -> B` and `A -o B` |
+| D1: one multiplicity bit on the arrow | changed (Q-S3-3 (a)): `A -o B` is a Pi with a binder at 1; a closure type has no bit, and the uses of a closure scale its captures |
 | D2: an upper bound at the second use of a variable | kept as the rule behind `REFUSE_AFFINE_REUSE` |
 | D3: the drop travels as a witness | not needed in v1: a dropped leaf has no destructor (O6: zeroize) |
 | probe 3: a syntactic use is not a use | kept: the count follows activations (`twice f` with a captured leaf is refused) |
@@ -507,7 +536,9 @@ ASCII alias; `langc check` gives `W_NONCANON` with the canonical text as
 | Sigma `(x : A) * B`, `A * B` | `(x : A) × B`, `A × B` | `*` for `×`; `Sigma (x : A) B` |
 | `Nat` | `ℕ` | `Nat` |
 | Universe `Type n` | `Type n` | none |
-| `-o` (S3), `Path` (S2) | not in S1 | not in S1 |
+| `A -o B` (S3) | `A ⊸ B` (U+22B8), read as `(@1 _ : A) → B`; `fmt` prints `⊸` when the binder name is not used | `-o` for `⊸` (Q-S3-2 (a)) |
+| binder multiplicity (S3) | `(@0 x : A)`, `(@1 x : A)`; a binder with no mark is omega (Q-S3-1 (a)) | none |
+| `Path` (S2) | not in S1 | not in S1 |
 
 The core names do not change: `ℕ` and `Nat` give the one core name `Nat`.
 SPEC.md section 2.1 gives the declaration forms (signature and clause,
@@ -537,7 +568,7 @@ on the new checks, docs, close (stage, commit message, next prompt).
 | S0 | kit seed, `design/DESIGN.md`, this plan, README, `AGENTS.md` | `make check` EXIT 0: 13 Wasm modules valid, differential 813 cases 0 mismatches, gate 0 failures, review and domain regressions passed |
 | S1 | surface: Agda-like Unicode (Q14 (b), 7.1), named steps as top-level definitions, `langc fmt`, `W_NONCANON`; `check --json` with progress counts; drop the refused kit names | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 9; check refusals 18; evals 30; ir 10 lowered; wasm 13 modules valid; differential 772 cases, 0 mismatches; fmt 50 canonical, 3 non-canonical pairs (round trip and idempotence); json 20 fixtures, diagnostics 31 codes (18 with a fixture, 13 with no fixture); gate 0 failures; review and domain regressions passed; mutants M1 to M6 killed (docs/STATUS.md, S1) |
 | S2 | kernel port: Path, Sigma, Pi, U, `I`, `transp`, `hcomp`, `Glue` and `ua` (S2-Q1 (a)), O18 (kit Ops removed, U2), no `record` form (S2-Q3 (b)), `Sum` as a domain CM (S2-Q2 (b), done in U6b2), `REFUSE_CELL`, cofamily (`codata` keyword and shape check done in U6c1), `Fin` (domain defs `lt` and `Fin`, done in U7) | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 10; check refusals 32; evals 64; ir 10 lowered; wasm 13 modules valid; differential 773 cases, 0 mismatches; fmt 78 canonical, 5 non-canonical pairs (round trip and idempotence); json 28 fixtures, diagnostics 41 codes (26 with a fixture, 15 with no fixture); gate 0 failures; review and domain regressions passed; `REFUSE_CELL` mutants C1, C1w, C2, C3 and mutants U6c2b, U7-M1 killed (docs/STATUS.md, S2) |
-| S3 | affine layer: multiplicities, `-o`, resource sorts, sealed `Leaf` and `Keystore`, `Durable`, the five refusal codes | one test per code; mutants on each refusal |
+| S3 | affine layer: multiplicities, `-o`, resource sorts, sealed `Leaf` and `Keystore`, `Durable` (a spine: one recursive field in each constructor, O-U6b-1 (a)), the five refusal codes | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 12; check refusals 35; evals 70; ir 10 lowered; wasm 13 modules valid; differential 773 cases, 0 mismatches; fmt 91 canonical, 6 non-canonical pairs (round trip and idempotence); json 33 fixtures, diagnostics 46 codes (31 with a fixture, 15 with no fixture); gate 0 failures; review and domain regressions passed; one JSON fixture for each S3 code; 14 mutants on the five S3 refusals and the two `Durable` branches, 14 of 14 killed (docs/STATUS.md, S3) |
 | S4 | `Digest`, hash ops (opaque), WOTS+, L-tree, Merkle, `sign`, `verify`; reference Keccak in `langc eval`; L1, L6 | own vectors plus a cross-check with an independent implementation; L1 at h = 4 |
 | S5 | `keygen`, `publicKey`, `next`, `commit`; Wasm signer (Keccak in the module, `commit` import, EIP-8310 JSON in the harness); L3 to L5 | differential eval against Wasm; reset refused |
 | S6 | EVM verifier: ERC-4337 entry, EIP-8141 entry with the shim, nonce binding L2; measured gas | bytecode runs in the kit EVM harness; wrong nonce and wrong root revert |
@@ -632,3 +663,69 @@ not rule it (section 1).
   counts (USER refresh).
 - Q14 surface. RULED (b). (a) ASCII verbose keywords with
   `step NAME INTO`. (b) Agda-like Unicode (section 7.1).
+
+S3 questions (S3-HANDOFF section 3). Marks (2026-10-26, S3 U1): the USER
+ruled each one.
+
+- Q-S3-1 binder multiplicity spelling. RULED (a). (a) Agda style:
+  `(@0 x : A) → B` and `(@1 x : A) → B`; no mark is omega. (b) Idris 2
+  style: `(0 x : A) → B`, `(1 x : A) → B`. (c) (a) and a mark `@ω` for an
+  explicit omega.
+- Q-S3-2 affine arrow spelling. RULED (a). (a) `A ⊸ B` (U+22B8) is
+  canonical and means `(@1 _ : A) → B`; the ASCII alias `-o` parses with
+  `W_NONCANON` (O14); fmt prints `A ⊸ B` when the binder name is not used.
+  (b) only `-o`. (c) no arrow sugar: `(@1 x : A) → B` only.
+- Q-S3-3 reading of `⊸`. RULED (a). (a) QTT (Q3 (a), Atkey 2018): `⊸` is
+  a binder at 1; a closure type has no bit, because the uses of the
+  closure scale its captures; `A ⊸ B` and `A → B` do not convert
+  (`TYPE_MISMATCH`, no subsumption in v1). (b) brisk D1: an `A ⊸ B` value
+  is an affine value, and the binder multiplicity is separate. (c) (a)
+  with the subsumption `A ⊸ B` below `A → B`.
+- Q-S3-4 a 0-variable in a run-time position. RULED (a).
+  (a) `REFUSE_AFFINE_REUSE` (used more than its multiplicity; the message
+  gives "used 1, allowed 0"). (b) a sixth code `REFUSE_AFFINE_ERASED`.
+- Q-S3-5 definitions checked at 0. RULED (a). (a) a definition whose type
+  ends in `Path`, `PathP` or a universe (a law, a proof or a type) is
+  checked at 0; each other definition at 1. (b) an explicit `@0` on the
+  signature name.
+- Q-S3-6 affine pair split. RULED (a). (a) a new rule
+  `unpack p (λ a b → t)`: `p` is used one time, `a` and `b` are bound at 1
+  (the name pairs with `pack`). (b) no split in S3; S5 adds it with
+  `next`.
+- Q-S3-7 `Leaf`, `Keystore` and `REFUSE_SEALED`. RULED (a). (a) `Leaf` is
+  a core base type with no constructor and no eliminator; `Stream` is a
+  codata in `domain/domain.lang` (`head`, `tail`); `Keystore` is a sealed
+  domain definition `Stream (Option Leaf)` (Q4 (a)); a program that
+  unfolds `Keystore` gets `REFUSE_SEALED` (fixture `peek`). (b) both core
+  base types; `REFUSE_SEALED` has no program fixture in S3, and a
+  fronttool regression tests it. (c) both core base types and three sealed
+  core ops `leafAt`, `advance`, `position` (4.3) that only the domain can
+  call.
+- Q-S3-8 `Durable` in `domain/domain.lang`. RULED (a).
+  (a) `data Durable (A : Type 0) : Type where`, `done : (doneOf : A) →
+  Durable A`, `commit : (at : ℕ) → (rest : Durable A) → Durable A`; it
+  meets the cell criterion; `commit` is public in S3, and S5 decides if a
+  program can build a `commit` node. (b) the same with other field names.
+- Q-S3-9 progress field `affine`. RULED (a). (a) `"k of m"`: the
+  declarations that pass the use count before the first affine error, as
+  `typed`; the 28 json expect lines change. (b) count only the
+  declarations that have a multiplicity mark or a resource type.
+- Q-S3-10 the name of the `Durable` continuation field. RULED (a)
+  (USER, 2026-10-26, U6b). `rest` is REFUSE_NAME in the real domain (rule
+  R4: `Stack` has a field `rest`). (a) `cont`, the continuation of the
+  commit node (section 4.3). (b) keep `rest` for `Durable` and rename the
+  field of `Stack` to `below`. (c) `commitRest`.
+- O-U5-1 the code of a `D.corec` step that uses a 1-variable. RULED (a)
+  (USER, 2026-10-26, U8). (a) `REFUSE_AFFINE_OMEGA`: the generated
+  corecursor binders are omega, and R2 keeps `REFUSE_AFFINE_FIX` out of
+  the generic application (section 4.2). (b) mark the generated
+  corecursor and give `REFUSE_AFFINE_FIX`.
+- O-U6-1 the types that `REFUSE_SEALED` refuses. RULED (a) (USER,
+  2026-10-26, U8). (a) each type argument with a resource sort in it, as
+  a head type, at each origin and multiplicity (section 4.2). (b) only a
+  type that converts with `Keystore`.
+- O-U6b-1 trees at the own parameters. RULED (a) (USER, 2026-10-26, U8).
+  (a) a family with type parameters has at most one recursive field in
+  each constructor (a spine, as `Durable`; else `DOMAIN_FAMILY`); trees
+  at the own parameters are a later slice item (docs/STATUS.md, S3).
+  (b) admit trees in S3.

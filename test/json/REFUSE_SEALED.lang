@@ -1,0 +1,2 @@
+peek : Keystore ⊸ Option Leaf
+peek ks = head (Option Leaf) ks

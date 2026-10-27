@@ -1,0 +1,5 @@
+burn : Leaf ⊸ ℕ
+burn l = 0
+
+spend : Leaf ⊸ ℕ → ℕ
+spend l n = fold (λ r → burn l) 0 n

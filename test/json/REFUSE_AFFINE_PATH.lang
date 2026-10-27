@@ -1,0 +1,2 @@
+hold : (@1 l : Leaf) → Path Leaf l l × ℕ
+hold l = pack (λ i → l) 0
