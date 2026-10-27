@@ -1,0 +1,92 @@
+-- The WOTS+ and XMSS types (S4 U4a, Q-S4-8 (a)). A Tweak value goes to
+-- thChain: the domain name converts to the builtin argument type
+-- (Q-S4-U3-b). tweakChain is the hash chain1 row.
+s : Digest
+s = digest 1 2 3 4
+
+x : Digest
+x = digest 5 6 7 8
+
+tw : Tweak
+tw = pack 1 (pack 4294967298 (pack 3 (pack 4 (pack 5 6))))
+
+tweakChain : Digest
+tweakChain = thChain s tw x
+
+tweakArg : (t : Tweak) → Digest
+tweakArg t = thChain s t x
+
+pk : PubKey
+pk = pack s (pack x (v1Params 4))
+
+pkN : ℕ
+pkN = witness (payload (payload pk))
+
+pkLogW : ℕ
+pkLogW = logWBits (witness (payload (payload (payload pk))))
+
+pkHeight : ℕ
+pkHeight = height pk
+
+sig : Sig 2
+sig = pack 7 (pack s (pack (λ k → x) (λ k → s)))
+
+sigIndex : ℕ
+sigIndex = witness sig
+
+sigWots0 : Digest
+sigWots0 = witness (payload (payload sig)) (pack 0 refl)
+
+sigAuth1 : Digest
+sigAuth1 = payload (payload (payload sig)) (pack 1 refl)
+
+-- chain and the WOTS+ functions (S4 U4b, own vectors Q-S4-7 (a)). tw has
+-- step 6, so chainOne is the hash chain1 row. chainSplit: 7 steps and then
+-- 8 steps give the 15 steps of chainFull.
+chainZero : Digest
+chainZero = chain s tw x 6 0
+
+chainOne : Digest
+chainOne = chain s tw x 6 1
+
+chainFull : Digest
+chainFull = chain s tw x 0 15
+
+chainSplit : Bool
+chainSplit = digestEq (chain s tw (chain s tw x 0 7) 7 8) chainFull
+
+sk : Digest
+sk = digest 9 10 11 12
+
+msgD : Digest
+msgD = digest 1311768467463790320 0 0 15
+
+mDigit0 : ℕ
+mDigit0 = wotsDigit msgD 0
+
+mDigit63 : ℕ
+mDigit63 = wotsDigit msgD 63
+
+csumM : ℕ
+csumM = wotsCsum msgD
+
+cDigit0 : ℕ
+cDigit0 = wotsDigit msgD 64
+
+cDigit1 : ℕ
+cDigit1 = wotsDigit msgD 65
+
+cDigit2 : ℕ
+cDigit2 = wotsDigit msgD 66
+
+pkFirst : Digest
+pkFirst = wotsPk sk s 3 (pack 0 refl)
+
+matches : (a : Fin 67 → Digest) → (b : Fin 67 → Digest) → ℕ
+matches a b = payload (fold (λ (st : ℕ × ℕ) → natPair (natAdd (witness st) 1) (natAdd (payload st) (boolElim (λ c → ℕ) 1 0 (digestEq (finAt Digest 67 a x (witness st)) (finAt Digest 67 b s (witness st)))))) (natPair 0 0) 67)
+
+roundTrip : ℕ
+roundTrip = matches (wotsPk sk s 3) (wotsPkFromSig s 3 msgD (wotsSign sk s 3 msgD))
+
+forged : ℕ
+forged = matches (wotsPk sk s 3) (wotsPkFromSig s 3 (digest 1311768467463790320 0 0 14) (wotsSign sk s 3 msgD))

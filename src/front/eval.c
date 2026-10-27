@@ -1,6 +1,7 @@
 /* The evaluator, the conversion test, quote and the printer (see
    front/core.h). SHARED by the tcc kits. */
 #include "front/core.h"
+#include "front/keccak.h"
 
 #include <string.h>
 
@@ -19,7 +20,14 @@ static const char *const OP_NAMES[] = {
   [OP_FOLD_FAMILY] = "fold", [OP_WITNESS] = "witness", [OP_PAYLOAD] = "payload",
   [OP_NAT_ADD] = "natAdd", [OP_NAT_SUB] = "natSub",
   [OP_NAT_MUL] = "natMul", [OP_NAT_EQ] = "natEq", [OP_NAT_LE] = "natLe",
-  [OP_FLAG_IF] = "flagIf", [OP_PROJ] = "?", [OP_SSET] = "SSet", [OP_I] = "I",
+  [OP_NAT_DIV] = "natDiv", [OP_NAT_MOD] = "natMod",
+  [OP_DIGEST] = "Digest", [OP_LOGW] = "LogW", [OP_LOGW1] = "logW1",
+  [OP_LOGW2] = "logW2", [OP_LOGW4] = "logW4", [OP_LOGW8] = "logW8",
+  [OP_LOGW_BITS] = "logWBits", [OP_DIGEST_VAL] = "digest",
+  [OP_DIGEST_EQ] = "digestEq", [OP_DIGIT] = "digit",
+  [OP_TH_CHAIN] = "thChain", [OP_TH_NODE] = "thNode", [OP_TH_MSG] = "thMsg",
+  [OP_PRF] = "prf",
+  [OP_FLAG_IF] = "flagIf", [OP_BOOL_ELIM] = "boolElim", [OP_PROJ] = "?", [OP_SSET] = "SSet", [OP_I] = "I",
   [OP_I0] = "i0", [OP_I1] = "i1", [OP_PATHP] = "PathP", [OP_PLAM] = "?",
   [OP_PAPP] = "?", [OP_INEG] = "~", [OP_IMIN] = "∧", [OP_IMAX] = "∨",
   [OP_PARTIAL] = "Partial", [OP_SYSTEM] = "↦", [OP_SYSNIL] = "[]",
@@ -39,7 +47,12 @@ static const unsigned char OP_ARITY[] = {
   [OP_OPTION_ELIM] = 3, [OP_PURE] = 1, [OP_MAP] = 2, [OP_BIND] = 2,
   [OP_FOLD_NAT] = 3, [OP_FOLD_FAMILY] = VARIES, [OP_WITNESS] = 1,
   [OP_PAYLOAD] = 1, [OP_NAT_ADD] = 2, [OP_NAT_SUB] = 2, [OP_NAT_MUL] = 2,
-  [OP_NAT_EQ] = 2, [OP_NAT_LE] = 2, [OP_FLAG_IF] = 3, [OP_PROJ] = 1,
+  [OP_NAT_EQ] = 2, [OP_NAT_LE] = 2,
+  [OP_NAT_DIV] = 2, [OP_NAT_MOD] = 2,
+  [OP_DIGEST] = 0, [OP_LOGW] = 0, [OP_LOGW1] = 0, [OP_LOGW2] = 0, [OP_LOGW4] = 0,
+  [OP_LOGW8] = 0, [OP_LOGW_BITS] = 1, [OP_DIGEST_VAL] = 4, [OP_DIGEST_EQ] = 2,
+  [OP_DIGIT] = 3, [OP_TH_CHAIN] = 3, [OP_TH_NODE] = 4, [OP_TH_MSG] = 4,
+  [OP_PRF] = 2, [OP_FLAG_IF] = 3, [OP_BOOL_ELIM] = 4, [OP_PROJ] = 1,
   [OP_SSET] = 0, [OP_I] = 0, [OP_I0] = 0, [OP_I1] = 0, [OP_PATHP] = 3,
   [OP_PLAM] = 1, [OP_PAPP] = 4, [OP_INEG] = 1, [OP_IMIN] = 2, [OP_IMAX] = 2,
   [OP_PARTIAL] = 2, [OP_SYSTEM] = 3, [OP_SYSNIL] = 0, [OP_FROMPARTIAL] = 1,
@@ -1167,6 +1180,8 @@ static const Value *transp_ctor(Machine *m, const Value *const *a, uint32_t n) {
   case OP_BOOL:
   case OP_UNIT:
   case OP_LEAF:
+  case OP_DIGEST:
+  case OP_LOGW:
   case OP_OPTION:
   case OP_FAMILY:
   case OP_UNIT_VAL:
@@ -1187,7 +1202,22 @@ static const Value *transp_ctor(Machine *m, const Value *const *a, uint32_t n) {
   case OP_NAT_MUL:
   case OP_NAT_EQ:
   case OP_NAT_LE:
+  case OP_NAT_DIV:
+  case OP_NAT_MOD:
+  case OP_LOGW1:
+  case OP_LOGW2:
+  case OP_LOGW4:
+  case OP_LOGW8:
+  case OP_LOGW_BITS:
+  case OP_DIGEST_VAL:
+  case OP_DIGEST_EQ:
+  case OP_DIGIT:
+  case OP_TH_CHAIN:
+  case OP_TH_NODE:
+  case OP_TH_MSG:
+  case OP_PRF:
   case OP_FLAG_IF:
+  case OP_BOOL_ELIM:
   case OP_PROJ:
   case OP_SSET:
   case OP_I:
@@ -1560,6 +1590,8 @@ static const Value *transp_op(Machine *m, const Value *h, const Value *const *a,
   case OP_BOOL:
   case OP_UNIT:
   case OP_LEAF:
+  case OP_DIGEST:
+  case OP_LOGW:
     return a[2];
   case OP_OPTION:
   case OP_FAMILY:
@@ -1589,7 +1621,22 @@ static const Value *transp_op(Machine *m, const Value *h, const Value *const *a,
   case OP_NAT_MUL:
   case OP_NAT_EQ:
   case OP_NAT_LE:
+  case OP_NAT_DIV:
+  case OP_NAT_MOD:
+  case OP_LOGW1:
+  case OP_LOGW2:
+  case OP_LOGW4:
+  case OP_LOGW8:
+  case OP_LOGW_BITS:
+  case OP_DIGEST_VAL:
+  case OP_DIGEST_EQ:
+  case OP_DIGIT:
+  case OP_TH_CHAIN:
+  case OP_TH_NODE:
+  case OP_TH_MSG:
+  case OP_PRF:
   case OP_FLAG_IF:
+  case OP_BOOL_ELIM:
   case OP_PROJ:
   case OP_SSET:
   case OP_I:
@@ -1671,19 +1718,29 @@ static const Value *reduce_sysmap(Machine *m, const Value *const *a, uint32_t n)
   return reduce_system(m, cell, 3u);
 }
 
-/* A constant with no fields: a numeral, a flag, unit or none. */
-static int fieldless(const Value *v) {
+/* A primitive constant: a numeral, flag, unit, none, LogW or digest of
+   numeral words. Digest stores its representation in four arguments. */
+static int data_constant(const Value *v) {
+  uint32_t i;
   if (v->kind == VAL_NAT)
+    return 1;
+  if (val_is(v, OP_DIGEST_VAL) && v->argc == 4u) {
+    for (i = 0; i < 4u; i++)
+      if (v->args[i]->kind != VAL_NAT)
+        return 0;
+    return 1;
+  }
+  if (val_is(v, OP_LOGW1) || val_is(v, OP_LOGW2) || val_is(v, OP_LOGW4) || val_is(v, OP_LOGW8))
     return 1;
   return val_is(v, OP_TRUE) || val_is(v, OP_FALSE) || val_is(v, OP_UNIT_VAL) || val_is(v, OP_NONE);
 }
 
-/* hcomp at data: u0 when u0 is a constant with no fields and each branch
+/* hcomp at data: u0 when u0 is a primitive constant and each branch
    of side at a fresh j is conv to u0, else stuck. */
 static const Value *hcomp_data(Machine *m, const Value *const *a, uint32_t n) {
   const Value *point;
   const Value *sys;
-  if (!fieldless(a[3]))
+  if (!data_constant(a[3]))
     return stuck_hcomp(m, a, n);
   point = val_var(m, m->fresh_level);
   sys = point == NULL ? NULL : apply_value(m, a[2], point);
@@ -1812,6 +1869,8 @@ static const Value *hcomp_op(Machine *m, const Value *const *a, uint32_t n) {
   case OP_BOOL:
   case OP_UNIT:
   case OP_LEAF:
+  case OP_DIGEST:
+  case OP_LOGW:
   case OP_OPTION:
   case OP_FAMILY:
     return hcomp_data(m, a, n);
@@ -1840,7 +1899,22 @@ static const Value *hcomp_op(Machine *m, const Value *const *a, uint32_t n) {
   case OP_NAT_MUL:
   case OP_NAT_EQ:
   case OP_NAT_LE:
+  case OP_NAT_DIV:
+  case OP_NAT_MOD:
+  case OP_LOGW1:
+  case OP_LOGW2:
+  case OP_LOGW4:
+  case OP_LOGW8:
+  case OP_LOGW_BITS:
+  case OP_DIGEST_VAL:
+  case OP_DIGEST_EQ:
+  case OP_DIGIT:
+  case OP_TH_CHAIN:
+  case OP_TH_NODE:
+  case OP_TH_MSG:
+  case OP_PRF:
   case OP_FLAG_IF:
+  case OP_BOOL_ELIM:
   case OP_PROJ:
   case OP_SSET:
   case OP_I:
@@ -1998,6 +2072,235 @@ static const Value *nat_mul(Machine *m, const Value *const *a, uint32_t n) {
   return y != 0 && x > UINT64_MAX / y ? overflow(m) : val_nat(m, x * y);
 }
 
+/* natDiv and natMod: division by 0 traps, as overflow does (Q-S4-5). */
+static const Value *nat_div(Machine *m, Op op, const Value *const *a, uint32_t n) {
+  const Value *out;
+  uint64_t x = 0;
+  uint64_t y = 0;
+  if (!nat_args(m, op, a, n, &x, &y, &out))
+    return out;
+  if (y == 0)
+    return overflow(m);
+  return val_nat(m, op == OP_NAT_DIV ? x / y : x % y);
+}
+
+/* The bits of a LogW value: 1, 2, 4 or 8. 0 for another value. */
+static uint64_t logw_bits(const Value *v) {
+  if (val_is(v, OP_LOGW1))
+    return 1u;
+  if (val_is(v, OP_LOGW2))
+    return 2u;
+  if (val_is(v, OP_LOGW4))
+    return 4u;
+  return val_is(v, OP_LOGW8) ? 8u : 0u;
+}
+
+static const Value *reduce_logw_bits(Machine *m, const Value *const *a, uint32_t n) {
+  const Value *out;
+  if (blocked(m, a[0], OP_LOGW_BITS, 0, 0, a, n, &out))
+    return out;
+  if (logw_bits(a[0]) == 0)
+    return internal(m, "logWBits on a value that is not a LogW");
+  return val_nat(m, logw_bits(a[0]));
+}
+
+/* digest w0 w1 w2 w3: the four words stay in args (Q-S4-2), so conversion
+   compares them. A trap word passes. */
+static const Value *reduce_digest(Machine *m, const Value *const *a, uint32_t n) {
+  uint32_t i;
+  for (i = 0; i < n; i++)
+    if (a[i]->kind == VAL_TRAP)
+      return a[i];
+  return val_op(m, VAL_OP, OP_DIGEST_VAL, 0, 0, a, n);
+}
+
+/* 1 when D is a digest value of four Nat words. Else *OUT is the stuck
+   operation. */
+static int digest_words(Machine *m, const Value *d, Op op, const Value *const *a, uint32_t n, uint64_t w[4], const Value **out) {
+  uint32_t i;
+  if (blocked(m, d, op, 0, 0, a, n, out))
+    return 0;
+  if (!val_is(d, OP_DIGEST_VAL) || d->argc != 4u) {
+    *out = internal(m, "a Digest operation on a value that is not a digest");
+    return 0;
+  }
+  for (i = 0; i < 4u; i++) {
+    if (blocked(m, d->args[i], op, 0, 0, a, n, out))
+      return 0;
+    if (d->args[i]->kind != VAL_NAT) {
+      *out = internal(m, "a digest word that is not a Nat");
+      return 0;
+    }
+    w[i] = d->args[i]->nat;
+  }
+  return 1;
+}
+
+/* digestEq computes in check too (Q-S4-3); a neutral argument is stuck. */
+static const Value *reduce_digest_eq(Machine *m, const Value *const *a, uint32_t n) {
+  const Value *out;
+  uint64_t x[4];
+  uint64_t y[4];
+  uint32_t i;
+  for (i = 0; i < n; i++)
+    if (a[i]->kind == VAL_TRAP)
+      return a[i];
+  if (!digest_words(m, a[0], OP_DIGEST_EQ, a, n, x, &out) || !digest_words(m, a[1], OP_DIGEST_EQ, a, n, y, &out))
+    return out;
+  return flag(m, memcmp(x, y, sizeof x) == 0);
+}
+
+/* digit logW d pos: the RFC 8391 base_w digit, from byte 0 and the most
+   significant bits first. logW divides 64, so a digit is in one word. A
+   position past the digest traps. */
+static const Value *reduce_digit(Machine *m, const Value *const *a, uint32_t n) {
+  const Value *out;
+  uint64_t w[4];
+  uint64_t bits;
+  uint64_t at;
+  uint32_t i;
+  for (i = 0; i < n; i++)
+    if (a[i]->kind == VAL_TRAP)
+      return a[i];
+  if (blocked(m, a[0], OP_DIGIT, 0, 0, a, n, &out) || blocked(m, a[2], OP_DIGIT, 0, 0, a, n, &out))
+    return out;
+  if (!digest_words(m, a[1], OP_DIGIT, a, n, w, &out))
+    return out;
+  bits = logw_bits(a[0]);
+  if (bits == 0 || a[2]->kind != VAL_NAT)
+    return internal(m, "digit on a value that is not a LogW or a Nat");
+  if (a[2]->nat >= 256u / bits)
+    return overflow(m);
+  at = a[2]->nat * bits;
+  return val_nat(m, (w[at / 64u] >> (64u - bits - at % 64u)) & (((uint64_t)1 << bits) - 1u));
+}
+
+/* Writes V as SIZE big-endian bytes at AT. */
+static void put_bytes(unsigned char *at, uint64_t v, uint32_t size) {
+  uint32_t i;
+  for (i = 0; i < size; i++)
+    at[i] = (unsigned char)(v >> (8u * (size - 1u - i)));
+}
+
+/* The six fields of a Tweak value pack layer (pack tree (pack kind (pack
+   leaf (pack chain step)))) (Q-S4-U3-b). 1 when each field is a Nat. Else
+   *OUT is the stuck operation or the trap. */
+static int tweak_fields(Machine *m, const Value *t, Op op, const Value *const *a, uint32_t n, uint64_t f[6], const Value **out) {
+  const Value *x;
+  uint32_t i;
+  for (i = 0; i < 6u; i++) {
+    if (blocked(m, t, op, 0, 0, a, n, out))
+      return 0;
+    if (i < 5u && (!val_is(t, OP_PACK) || t->argc != 2u)) {
+      *out = internal(m, "a tweak that is not a pack value");
+      return 0;
+    }
+    x = i < 5u ? t->args[0] : t;
+    if (blocked(m, x, op, 0, 0, a, n, out))
+      return 0;
+    if (x->kind != VAL_NAT) {
+      *out = internal(m, "a tweak field that is not a Nat");
+      return 0;
+    }
+    f[i] = x->nat;
+    t = i < 5u ? t->args[1] : t;
+  }
+  return 1;
+}
+
+/* The RFC 8391 ADRS (5.4): 8 big-endian 32-bit words: layer, tree (2
+   words), kind, leaf, chain, step, 0. 0 when a field other than tree is
+   above 32 bits: the caller traps. */
+static int adrs_bytes(const uint64_t f[6], unsigned char out[32]) {
+  static const unsigned char at[6] = {0, 4, 12, 16, 20, 24};
+  static const unsigned char size[6] = {4, 8, 4, 4, 4, 4};
+  uint32_t i;
+  for (i = 0; i < 6u; i++) {
+    if (size[i] == 4 && f[i] > UINT32_MAX)
+      return 0;
+    put_bytes(out + at[i], f[i], size[i]);
+  }
+  put_bytes(out + 28, 0, 4u);
+  return 1;
+}
+
+/* Writes one 32-byte part of a hash input at AT (5.4). KIND: P the RFC
+   8391 prefix (toByte(3, 32) for prf, toByte(2, 32) for thMsg), D a digest,
+   T the ADRS of a tweak, N a Nat as toByte(v, 32). 1 when the part is
+   written. Else *OUT is the stuck operation or the trap. */
+static int hash_part(Machine *m, char kind, const Value *x, Op op, const Value *const *a, uint32_t n, unsigned char *at, const Value **out) {
+  uint64_t w[4];
+  uint64_t f[6];
+  uint32_t i;
+  memset(at, 0, 32u);
+  if (kind == 'P') {
+    put_bytes(at + 24, op == OP_PRF ? 3u : 2u, 8u);
+    return 1;
+  }
+  if (kind == 'N') {
+    if (blocked(m, x, op, 0, 0, a, n, out))
+      return 0;
+    if (x->kind != VAL_NAT) {
+      *out = internal(m, "a hash argument that is not a Nat");
+      return 0;
+    }
+    put_bytes(at + 24, x->nat, 8u);
+    return 1;
+  }
+  if (kind == 'T') {
+    if (!tweak_fields(m, x, op, a, n, f, out))
+      return 0;
+    if (!adrs_bytes(f, at)) {
+      *out = overflow(m);
+      return 0;
+    }
+    return 1;
+  }
+  if (!digest_words(m, x, op, a, n, w, out))
+    return 0;
+  for (i = 0; i < 4u; i++)
+    put_bytes(at + 8u * i, w[i], 8u);
+  return 1;
+}
+
+/* thChain, thNode, thMsg and prf: Keccak-256 of the 5.4 input. They
+   compute only when m->hash is set (langc eval, Q-S4-3 (a)). Else they are
+   stuck, also on digest values, so no law uses a Keccak output (L6). A trap
+   argument passes. */
+static const Value *reduce_hash(Machine *m, Op op, const Value *const *a, uint32_t n) {
+  const char *layout = op == OP_TH_CHAIN ? "DTD" : op == OP_TH_NODE ? "DTDD" : op == OP_PRF ? "PDT" : "PDDND";
+  unsigned char in[160];
+  unsigned char h[32];
+  const Value *words[4];
+  const Value *out;
+  uint64_t w;
+  uint32_t arg = 0;
+  uint32_t i;
+  uint32_t j;
+  for (i = 0; i < n; i++)
+    if (a[i]->kind == VAL_TRAP)
+      return a[i];
+  if (!m->hash)
+    return val_op(m, VAL_STUCK, op, 0, 0, a, n);
+  for (i = 0; layout[i] != '\0'; i++) {
+    if (layout[i] != 'P' && arg >= n)
+      return internal(m, "a hash operation with too few arguments");
+    if (!hash_part(m, layout[i], layout[i] == 'P' ? NULL : a[arg], op, a, n, in + 32u * i, &out))
+      return out;
+    arg += layout[i] == 'P' ? 0u : 1u;
+  }
+  keccak256(in, 32u * (size_t)i, h);
+  for (i = 0; i < 4u; i++) {
+    w = 0;
+    for (j = 0; j < 8u; j++)
+      w = (w << 8) | h[8u * i + j];
+    words[i] = val_nat(m, w);
+    if (words[i] == NULL)
+      return NULL;
+  }
+  return reduce_digest(m, words, 4u);
+}
+
 static const Value *nat_test(Machine *m, Op op, const Value *const *a, uint32_t n) {
   const Value *out;
   uint64_t x = 0;
@@ -2016,6 +2319,19 @@ static const Value *reduce_flag_if(Machine *m, const Value *const *a, uint32_t n
   if (val_is(a[0], OP_FALSE))
     return a[2];
   return internal(m, "a flagIf of a value that is not a Bool");
+}
+
+/* boolElim P x y b: x on true and y on false. A trap b gives the trap; a
+   neutral b gives the stuck operation. */
+static const Value *reduce_bool_elim(Machine *m, const Value *const *a, uint32_t n) {
+  const Value *out;
+  if (blocked(m, a[3], OP_BOOL_ELIM, 0, 0, a, n, &out))
+    return out;
+  if (val_is(a[3], OP_TRUE))
+    return a[1];
+  if (val_is(a[3], OP_FALSE))
+    return a[2];
+  return internal(m, "a boolElim of a value that is not a Bool");
 }
 
 static const Value *reduce_proj(Machine *m, uint32_t inst, uint32_t field, const Value *const *a, uint32_t n) {
@@ -2097,10 +2413,16 @@ static const Value *reduce_op(Machine *m, Op op, uint32_t inst, uint32_t field, 
   if (!arity_ok(m, op, inst, n))
     return internal(m, "an operation with the wrong number of arguments");
   switch (op) {
+  case OP_LOGW1:
+  case OP_LOGW2:
+  case OP_LOGW4:
+  case OP_LOGW8:
   case OP_NAT:
   case OP_BOOL:
   case OP_UNIT:
   case OP_LEAF:
+  case OP_DIGEST:
+  case OP_LOGW:
   case OP_OPTION:
   case OP_FAMILY:
   case OP_UNIT_VAL:
@@ -2170,8 +2492,26 @@ static const Value *reduce_op(Machine *m, Op op, uint32_t inst, uint32_t field, 
   case OP_NAT_EQ:
   case OP_NAT_LE:
     return nat_test(m, op, a, n);
+  case OP_NAT_DIV:
+  case OP_NAT_MOD:
+    return nat_div(m, op, a, n);
+  case OP_LOGW_BITS:
+    return reduce_logw_bits(m, a, n);
+  case OP_DIGEST_VAL:
+    return reduce_digest(m, a, n);
+  case OP_DIGEST_EQ:
+    return reduce_digest_eq(m, a, n);
+  case OP_DIGIT:
+    return reduce_digit(m, a, n);
+  case OP_TH_CHAIN:
+  case OP_TH_NODE:
+  case OP_TH_MSG:
+  case OP_PRF:
+    return reduce_hash(m, op, a, n);
   case OP_FLAG_IF:
     return reduce_flag_if(m, a, n);
+  case OP_BOOL_ELIM:
+    return reduce_bool_elim(m, a, n);
   case OP_PROJ:
     return reduce_proj(m, inst, field, a, n);
   }

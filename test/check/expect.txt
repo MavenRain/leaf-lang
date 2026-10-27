@@ -33,3 +33,6 @@ fin-bound.lang TYPE_REFL
 face-refl.lang TYPE_REFL
 face-lambda.lang TYPE_ENDPOINT
 glue-pair.lang GLUE_BOUNDARY
+hash-node.lang TYPE_REFL
+hash-root.lang TYPE_REFL
+hash-verify.lang TYPE_REFL

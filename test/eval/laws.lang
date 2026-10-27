@@ -1,0 +1,43 @@
+-- L1 at h = 4 (S4 U6, Q-S4-7 (a)): for each leaf i of pk4 and a message m,
+-- verify pk4 m (signAt sk skPrf pk4 i m) is true. In S5, L1 is on the
+-- keystore (next and sign).
+s : Digest
+s = digest 1 2 3 4
+
+sk : Digest
+sk = digest 9 10 11 12
+
+skPrf : Digest
+skPrf = digest 13 14 15 16
+
+msg : Digest
+msg = digest 1311768467463790320 0 0 15
+
+pk4 : PubKey
+pk4 = pkFromSeeds sk s (v1Params 4)
+
+-- l1At pk m i is true when the signature of m at leaf i verifies.
+l1At : (pk : PubKey) → (m : Digest) → (i : ℕ) → Bool
+l1At pk m i = verify pk m (signAt sk skPrf pk i m)
+
+-- The fold state of l1All: the leaf index and the and of the results.
+lawState : (i : ℕ) → (b : Bool) → ℕ × Bool
+lawState i b = pack i b
+
+-- l1All pk m is true when l1At pk m i is true for i = 0 to 15 (the 16
+-- leaves at h = 4).
+l1All : (pk : PubKey) → (m : Digest) → Bool
+l1All pk m = payload (fold (λ (st : ℕ × Bool) → lawState (natAdd (witness st) 1) (boolElim (λ b → Bool) (l1At pk m (witness st)) false (payload st))) (lawState 0 true) 16)
+
+l1Msg : Bool
+l1Msg = l1All pk4 msg
+
+-- Single leaves with other messages.
+l1Zero : Bool
+l1Zero = l1At pk4 (digest 0 0 0 0) 0
+
+l1Last : Bool
+l1Last = l1At pk4 (digest 1311768467463790320 0 0 14) 15
+
+l1Mid : Bool
+l1Mid = l1At pk4 (digest 5 6 7 8) 10

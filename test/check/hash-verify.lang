@@ -1,0 +1,8 @@
+-- L6 (S4 U6): L1 is an eval check (Q-S4-7 (a)), not a kernel proof. In
+-- langc eval good of test/eval/xmss.lang gives 1, but in check verify
+-- compares two stuck digests, so refl does not prove the equation.
+pk4 : PubKey
+pk4 = pkFromSeeds (digest 9 10 11 12) (digest 1 2 3 4) (v1Params 4)
+
+good : Path Bool (verify pk4 (digest 1311768467463790320 0 0 15) (signAt (digest 9 10 11 12) (digest 13 14 15 16) pk4 5 (digest 1311768467463790320 0 0 15))) true
+good = refl

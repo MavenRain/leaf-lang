@@ -22,6 +22,8 @@ typedef enum {
   OP_BOOL,
   OP_UNIT,
   OP_LEAF, /* the one-time key sort: a resource, no constructor (S3) */
+  OP_DIGEST, /* the hash output sort: 32 bytes (S4) */
+  OP_LOGW, /* log2 w of WOTS+: 1, 2, 4 or 8 (S4) */
   OP_OPTION,
   OP_FAMILY,
   OP_UNIT_VAL,
@@ -44,7 +46,22 @@ typedef enum {
   OP_NAT_MUL,
   OP_NAT_EQ,
   OP_NAT_LE,
+  OP_NAT_DIV,
+  OP_NAT_MOD,
+  OP_LOGW1,
+  OP_LOGW2,
+  OP_LOGW4,
+  OP_LOGW8,
+  OP_LOGW_BITS,
+  OP_DIGEST_VAL, /* digest w0 w1 w2 w3: the four words in args */
+  OP_DIGEST_EQ,
+  OP_DIGIT,
+  OP_TH_CHAIN, /* the hash ops (5.4): stuck unless Machine.hash */
+  OP_TH_NODE,
+  OP_TH_MSG,
+  OP_PRF,
   OP_FLAG_IF,
+  OP_BOOL_ELIM,
   OP_PROJ,
   OP_SSET,  /* the sort of pretypes; no surface name */
   OP_I,     /* the interval */
@@ -196,6 +213,7 @@ typedef struct {
   uint32_t fresh_level; /* above every variable level allocated by this machine */
   uint64_t fuel;
   int overflowed;
+  int hash; /* 1: the hash ops compute; only langc eval sets it (Q-S4-3) */
   size_t checked;  /* check_program: the declarations before the current one */
   int decl_failed; /* check_program: 1 when declaration CHECKED failed */
 } Machine;

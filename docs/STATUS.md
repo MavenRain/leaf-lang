@@ -270,3 +270,90 @@ diagnostic checks were retained.
 - `path_rule` covers `symm`, `trans`, `cong` and `transport` (each one
   elaborates to `λ i →` or to `transp`, PLAN 3). Only `transp` has a test
   (O-U5-4).
+
+## S4: hash layer
+
+S4 (2026-10-27) adds the hash layer and the XMSS algorithms (PLAN
+section 3, section 9 S4 row).
+
+- `Digest` is a core base type: 32 bytes (v1 n = 32, Q-S4-8 (a)). A
+  value holds four 64-bit big-endian words in its arguments, and the
+  printer prints it as `digest w0 w1 w2 w3` (Q-S4-2 (a)). A `Digest` is
+  copyable (resource class NONE). `digestEq : Digest → Digest → Bool`
+  compares the four words.
+- `digit : LogW → Digest → ℕ → ℕ` gives the RFC 8391 base_w digit, from
+  byte 0 and the most significant bits first. A position past the digest
+  traps (Q-S4-U2-a). `LogW` has the values `logW1`, `logW2`, `logW4` and
+  `logW8`, and `logWBits` gives 1, 2, 4 or 8 (Q-S4-U2-d).
+- `natDiv` and `natMod` are base ops on the machine word (Q-S4-5 (a)). A
+  division by 0 traps.
+- `boolElim` is the dependent `Bool` eliminator. It computes on `true`
+  and `false`, and a neutral `b` stays stuck (Q-S4-U4-a (a)). The domain
+  `finAt` uses it to read a `Fin n` field at a fold counter.
+- Hash ops: `thChain`, `thNode`, `thMsg` and `prf` are builtin rows with
+  their own ops. Each op packs its `Tweak` as the 32-byte RFC 8391 ADRS
+  (Q-S4-4 (a)) and calls the reference Keccak-256 in src/front/keccak.c
+  (the kit Keccak, pad 0x01). A tweak field above 32 bits traps
+  (Q-S4-U3-a).
+- The hash ops compute only in `langc eval` (Q-S4-3 (a)). In `langc
+  check` they stay stuck, so the kernel never unfolds a hash op (L6).
+- The S4 traps use `EVAL_OVERFLOW`. Its row in docs/DIAGNOSTICS.md gives
+  the four causes. S4 adds no code: docs/DIAGNOSTICS.md has 46 codes
+  (S3: 46).
+- domain/domain.lang adds `Tweak`, `Params`, `PubKey`, `Sig` and the RFC
+  8391 algorithms over the hash ops: `chain`, `wotsPk`, `wotsSign` and
+  `wotsPkFromSig` (WOTS+, w = 16, len = 67), `ltree`, `treeHash`,
+  `authPath`, `rootFromPath`, `pkFromSeeds`, `signAt` and `verify`.
+  `ltree` and `treeNode` use fixed nesting (`lTreeUp`, `up`, `lv0` to
+  `lv20`), HMAX = 20 (Q-S4-U5-a (a)). `verify` gives false when `n` or
+  `logW` is not the v1 value (Q-S4-8 (a)), or when `h` is above HMAX.
+- Vectors (Q-S4-1 (c)): each hash op has one vector from an independent
+  implementation, Foundry `cast keccak`, and the empty input has one.
+  WOTS+, the L-tree and the Merkle tree use own vectors. The rows are in
+  test/eval: digest, nat-div, hash, bool-elim, wots and xmss.
+- L1 at h = 4: test/eval/laws.lang checks that `verify pk4 m (signAt sk
+  skPrf pk4 i m)` is `true` for i = 0 to 15. S5 checks the keystore
+  form.
+- L6: test/check/hash-node.lang, hash-root.lang and hash-verify.lang
+  state equations that are true in `langc eval`. `langc check` refuses
+  each one with `TYPE_REFL`, because the hash ops stay stuck.
+- No example entry uses a `Digest` op, so the lowering and the
+  differential do not change.
+
+Gate counts (`make check`): examples 10 checked, 0 failed; parse refusals
+12; check refusals 38; evals 142; ir 10 lowered; wasm 13 modules valid;
+differential 773 cases, 0 mismatches; fmt 101 canonical, 6 non-canonical
+pairs; json 33 fixtures; diagnostics 46 codes, 31 with a fixture, 15 with
+no fixture; gate 0 failures; review and domain regressions passed.
+
+### Mutants
+
+All 10 are killed. M1 to M6 are in src/front/eval.c, and M7a to M9 are
+in domain/domain.lang. The eval rows kill 9 (all but M5). The L6 check
+rows kill M5 and M7b.
+
+| Mutant | Site | Edit | Killer |
+|---|---|---|---|
+| M1 | `reduce_digest_eq` | `digestEq` compares the words 0 to 2 only | eval row digest `other` |
+| M2 | `reduce_digit` | `digit` does not mask the digit | eval rows digest `at1`, wots `csumM`, `cDigit0` |
+| M3 | `reduce_digit` | a position past the digest does not trap | eval row digest `past` |
+| M4 | `nat_div` | `natDiv` and `natMod` by 0 do not trap | eval rows nat-div `divZero`, `modZero` |
+| M5 | the hash op reducer | `langc check` computes the hash ops | check rows hash-node, hash-root, hash-verify |
+| M6 | `adrs_bytes` | a tweak field above 32 bits does not trap | eval row hash `wide` |
+| M7a | `verify` | the root compare uses the `pubSeed` | eval rows xmss `good`, laws `l1Msg`, `l1Zero` |
+| M7b | `verify` | the v1 arm gives `true` | check row hash-verify; eval rows xmss `badMsg`, `badIndex` |
+| M8 | `wotsCsum` | the checksum uses `natSub 14`, not `natSub 15` | eval rows wots `csumM`, `cDigit0`, `cDigit1` |
+| M9 | `pathNode` | the two arms of each `boolElim` change places | eval rows xmss `path0`, `path9`, `good` |
+
+### Open items from S4
+
+- `verify` has no explicit index bound (O-U6-1, kept). RFC 8391
+  Algorithm 14 (XMSS_verify) has no idx_sig bound. The root compare
+  refuses an index past 2^h - 1 (eval row xmss `badLeaf`).
+- L1 is checked at h = 4 only. Key generation at h = 4 is about 16,080
+  `thChain` calls in `langc eval`; at h = 10 it is about 64 times more.
+- The definitions fix n = 32 and logW = 4. `Params` keeps `n` and
+  `logW` for the EIP-8310 JSON (Q-S4-8 (a)).
+- The hash ops do not lower. S5 puts Keccak in the Wasm module.
+- `check --json` gives "laws" as "0 of 0" (main.c). L1 and L6 do not
+  change it.

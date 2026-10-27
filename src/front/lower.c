@@ -637,6 +637,8 @@ static int lower_canon(Low *l, Buf *b, const Value *v, Operand *out) {
   case OP_BOOL:
   case OP_UNIT:
   case OP_LEAF:
+  case OP_DIGEST:
+  case OP_LOGW:
   case OP_OPTION:
   case OP_FAMILY:
   case OP_UNIT_VAL:
@@ -688,9 +690,25 @@ static int lower_canon(Low *l, Buf *b, const Value *v, Operand *out) {
   case OP_NAT_MUL:
   case OP_NAT_EQ:
   case OP_NAT_LE:
+  case OP_NAT_DIV:
+  case OP_NAT_MOD:
+  case OP_LOGW_BITS:
+  case OP_DIGEST_VAL:
+  case OP_DIGEST_EQ:
+  case OP_DIGIT:
+  case OP_TH_CHAIN:
+  case OP_TH_NODE:
+  case OP_TH_MSG:
+  case OP_PRF:
   case OP_FLAG_IF:
+  case OP_BOOL_ELIM:
   case OP_PROJ:
     return closure(l);
+  case OP_LOGW1:
+  case OP_LOGW2:
+  case OP_LOGW4:
+  case OP_LOGW8:
+    return internal(l, "a value with no IR form (O8)");
   }
   return internal(l, "an unknown operation");
 }
@@ -992,6 +1010,8 @@ static int lower_stuck(Low *l, Buf *b, const Value *v, Operand *out) {
   case OP_BOOL:
   case OP_UNIT:
   case OP_LEAF:
+  case OP_DIGEST:
+  case OP_LOGW:
   case OP_OPTION:
   case OP_FAMILY:
   case OP_UNIT_VAL:
@@ -1052,6 +1072,22 @@ static int lower_stuck(Low *l, Buf *b, const Value *v, Operand *out) {
     return nat_bin(l, b, v, IR_OP_EQ, 0, out);
   case OP_NAT_LE:
     return nat_bin(l, b, v, IR_OP_LE, 0, out);
+  case OP_NAT_DIV:
+  case OP_NAT_MOD:
+  case OP_LOGW1:
+  case OP_LOGW2:
+  case OP_LOGW4:
+  case OP_LOGW8:
+  case OP_LOGW_BITS:
+  case OP_DIGEST_VAL:
+  case OP_DIGEST_EQ:
+  case OP_DIGIT:
+  case OP_TH_CHAIN:
+  case OP_TH_NODE:
+  case OP_TH_MSG:
+  case OP_PRF:
+  case OP_BOOL_ELIM:
+    return internal(l, "an operation with no IR form (O8)");
   case OP_FLAG_IF:
     return flag_if(l, b, v, out);
   }

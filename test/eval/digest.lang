@@ -1,0 +1,41 @@
+-- Digest, digest, digestEq, digit and LogW (S4 U2, Q-S4-2 (a), Q-S4-3
+-- (a)). w0 = 0x123456789abcdef0 and w3 = 15. digit is RFC 8391 base_w:
+-- from byte 0, the most significant bits first.
+d : Digest
+d = digest 1311768467463790320 0 0 15
+
+e : Digest
+e = digest 1311768467463790320 0 0 14
+
+same : Bool
+same = digestEq d d
+
+other : Bool
+other = digestEq d e
+
+at0 : ℕ
+at0 = digit logW4 d 0
+
+at1 : ℕ
+at1 = digit logW4 d 1
+
+at63 : ℕ
+at63 = digit logW4 d 63
+
+past : ℕ
+past = digit logW4 d 64
+
+byte0 : ℕ
+byte0 = digit logW8 d 0
+
+bit3 : ℕ
+bit3 = digit logW1 d 3
+
+pair1 : ℕ
+pair1 = digit logW2 d 1
+
+bits : ℕ
+bits = logWBits logW4
+
+stuckEq : Digest → Bool
+stuckEq x = digestEq x d

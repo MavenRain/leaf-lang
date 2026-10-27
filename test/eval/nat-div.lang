@@ -1,0 +1,19 @@
+-- natDiv and natMod (S4 U2, Q-S4-5 (a)). Division by 0 traps, as
+-- overflow does. A neutral argument stays stuck.
+div7 : ℕ
+div7 = natDiv 7 2
+
+mod7 : ℕ
+mod7 = natMod 7 2
+
+divZero : ℕ
+divZero = natDiv 7 0
+
+modZero : ℕ
+modZero = natMod 7 0
+
+divN : ℕ → ℕ
+divN n = natDiv n 2
+
+divS : ℕ → Option ℕ
+divS n = some (natDiv n 2)

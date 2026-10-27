@@ -68,7 +68,9 @@ typedef enum {
   RULE_CONG,
   RULE_TRANSPORT,
   RULE_NAT2,
+  RULE_BASE,
   RULE_FLAG_IF,
+  RULE_BOOL_ELIM,
   RULE_PATHP,
   RULE_INTERVAL,
   RULE_PARTIAL,
@@ -94,6 +96,8 @@ static const Builtin BUILTINS[] = {
   {"Bool", 0, RULE_TYPE0, OP_BOOL, OP_NAT, 0},
   {"Unit", 0, RULE_TYPE0, OP_UNIT, OP_NAT, 0},
   {"Leaf", 0, RULE_TYPE0, OP_LEAF, OP_NAT, 0},
+  {"Digest", 0, RULE_TYPE0, OP_DIGEST, OP_NAT, 0},
+  {"LogW", 0, RULE_TYPE0, OP_LOGW, OP_NAT, 0},
   {"Option", 1, RULE_TYPE1, OP_OPTION, OP_NAT, 0},
   {"I", 0, RULE_VALUE0, OP_I, OP_SSET, 0},
   {"i0", 0, RULE_VALUE0, OP_I0, OP_I, 0},
@@ -139,7 +143,22 @@ static const Builtin BUILTINS[] = {
   {"natMul", 2, RULE_NAT2, OP_NAT_MUL, OP_NAT, 0},
   {"natEq", 2, RULE_NAT2, OP_NAT_EQ, OP_BOOL, 0},
   {"natLe", 2, RULE_NAT2, OP_NAT_LE, OP_BOOL, 0},
-  {"flagIf", 3, RULE_FLAG_IF, OP_FLAG_IF, OP_BOOL, 0}
+  {"natDiv", 2, RULE_NAT2, OP_NAT_DIV, OP_NAT, 0},
+  {"natMod", 2, RULE_NAT2, OP_NAT_MOD, OP_NAT, 0},
+  {"logW1", 0, RULE_VALUE0, OP_LOGW1, OP_LOGW, 0},
+  {"logW2", 0, RULE_VALUE0, OP_LOGW2, OP_LOGW, 0},
+  {"logW4", 0, RULE_VALUE0, OP_LOGW4, OP_LOGW, 0},
+  {"logW8", 0, RULE_VALUE0, OP_LOGW8, OP_LOGW, 0},
+  {"logWBits", 1, RULE_BASE, OP_LOGW_BITS, OP_NAT, 0},
+  {"digest", 4, RULE_BASE, OP_DIGEST_VAL, OP_DIGEST, 0},
+  {"digestEq", 2, RULE_BASE, OP_DIGEST_EQ, OP_BOOL, 0},
+  {"digit", 3, RULE_BASE, OP_DIGIT, OP_NAT, 0},
+  {"thChain", 3, RULE_BASE, OP_TH_CHAIN, OP_DIGEST, 0},
+  {"thNode", 4, RULE_BASE, OP_TH_NODE, OP_DIGEST, 0},
+  {"thMsg", 4, RULE_BASE, OP_TH_MSG, OP_DIGEST, 0},
+  {"prf", 2, RULE_BASE, OP_PRF, OP_DIGEST, 0},
+  {"flagIf", 3, RULE_FLAG_IF, OP_FLAG_IF, OP_BOOL, 0},
+  {"boolElim", 4, RULE_BOOL_ELIM, OP_BOOL_ELIM, OP_NAT, 0}
 };
 
 #define BUILTIN_COUNT ((uint32_t)(sizeof BUILTINS / sizeof BUILTINS[0]))
@@ -1128,6 +1147,53 @@ static const Core *rule_nat2(Call *k) {
   return op3(c, k->b->op, 0, 2, x, y, NULL);
 }
 
+/* The argument types of digit and thMsg; the other base rules take one
+   type. tweak_arg marks the Tweak argument of thChain, thNode and prf. */
+static const Op DIGIT_ARGS[3] = {OP_LOGW, OP_DIGEST, OP_NAT};
+static const Op MSG_ARGS[4] = {OP_DIGEST, OP_DIGEST, OP_NAT, OP_DIGEST};
+
+static Op base_arg(Op op, uint32_t i) {
+  if (op == OP_DIGIT)
+    return i < 3u ? DIGIT_ARGS[i] : OP_NAT;
+  if (op == OP_TH_MSG)
+    return i < 4u ? MSG_ARGS[i] : OP_NAT;
+  if (op == OP_DIGEST_EQ || op == OP_TH_CHAIN || op == OP_TH_NODE || op == OP_PRF)
+    return OP_DIGEST;
+  return op == OP_LOGW_BITS ? OP_LOGW : OP_NAT;
+}
+
+/* 1 for the second argument of thChain, thNode and prf: a Tweak. */
+static int tweak_arg(Op op, uint32_t i) {
+  return i == 1u && (op == OP_TH_CHAIN || op == OP_TH_NODE || op == OP_PRF);
+}
+
+/* The guest Tweak (Q-S4-U3-b): (layer : ℕ) × (tree : ℕ) × (kind : ℕ) ×
+   (leaf : ℕ) × (chain : ℕ) × ℕ, the last part step. The hash ops pack it
+   as the RFC 8391 ADRS (5.4). */
+static const Value *tweak_type(Checker *c) {
+  static const char *const FIELDS[5] = {"layer", "tree", "kind", "leaf", "chain"};
+  const Core *t = quote_value(c->m, c->level, nat_type(c));
+  uint32_t i;
+  for (i = 5u; i > 0; i--)
+    t = core_bind(c, CORE_SIGMA, FIELDS[i - 1u], quote_value(c->m, c->level, nat_type(c)), t);
+  return here(c, t);
+}
+
+/* digest, digestEq, digit, logWBits and the hash ops (S4): each argument
+   has a base type or the Tweak Sigma. */
+static const Core *rule_base(Call *k) {
+  Checker *c = k->c;
+  const Core *args[4];
+  uint32_t i;
+  for (i = 0; i < k->b->arity && i < 4u; i++) {
+    args[i] = check(c, k->args[i], tweak_arg(k->b->op, i) ? tweak_type(c) : tyop(c, base_arg(k->b->op, i), 0, NULL, NULL, NULL));
+    if (args[i] == NULL)
+      return NULL;
+  }
+  k->type = tyop(c, k->b->result, 0, NULL, NULL, NULL);
+  return core_op(c, k->b->op, 0, 0, args, i);
+}
+
 /* flagIf b yes no */
 static const Core *rule_flag_if(Call *k) {
   Checker *c = k->c;
@@ -1308,6 +1374,32 @@ static const Core *rule_transp(Call *k) {
   u = check(c, k->args[2], apply_value(c->m, lv, op0(c, OP_I0)));
   k->type = apply_value(c->m, lv, op0(c, OP_I1));
   return op3(c, OP_TRANSP, 0, 3, line, r, u);
+}
+
+/* boolElim P x y b: P : Bool → Type 0, x : P true, y : P false and b :
+   Bool, of type P b (Q-S4-U4-a). The motive is erased. The scrutinee is
+   used one time; x and y are the two arms. */
+static const Core *rule_bool_elim(Call *k) {
+  Checker *c = k->c;
+  const Core *args[4];
+  const Value *pv;
+  uint32_t *start;
+  uint32_t *most;
+  args[0] = check_at(c, MULT_ZERO, k->args[0], val_arrow(c->m, bool_type(c), val_univ(c->m, 0)));
+  pv = here(c, args[0]);
+  args[3] = pv == NULL ? NULL : check(c, k->args[3], bool_type(c));
+  if (args[3] == NULL)
+    return NULL;
+  start = uses_save(c);
+  args[1] = check(c, k->args[1], apply_value(c->m, pv, op0(c, OP_TRUE)));
+  most = uses_save(c);
+  uses_restore(c, start);
+  args[2] = args[1] == NULL ? NULL : check(c, k->args[2], apply_value(c->m, pv, op0(c, OP_FALSE)));
+  uses_max(c, most);
+  if (args[2] == NULL)
+    return NULL;
+  k->type = apply_value(c->m, pv, here(c, args[3]));
+  return core_op(c, OP_BOOL_ELIM, 0, 0, args, 4);
 }
 
 /* The side `λ j → [ φ1 ↦ u1 , ... ]` of hcomp against TY, with j : I. The
@@ -1663,8 +1755,12 @@ static const Core *rule(Call *k) {
     return path_rule(k, rule_transport);
   case RULE_NAT2:
     return rule_nat2(k);
+  case RULE_BASE:
+    return rule_base(k);
   case RULE_FLAG_IF:
     return rule_flag_if(k);
+  case RULE_BOOL_ELIM:
+    return rule_bool_elim(k);
   case RULE_PATHP:
     return rule_pathp(k);
   }
@@ -2166,7 +2262,7 @@ static Resource resource_shape(Checker *c, const Value *v, uint32_t level) {
     return RESOURCE_UNKNOWN;
   if (v->op == OP_LEAF)
     return RESOURCE_PRESENT;
-  if (v->op == OP_NAT || v->op == OP_BOOL || v->op == OP_UNIT || v->op == OP_I || v->op == OP_SSET)
+  if (v->op == OP_NAT || v->op == OP_BOOL || v->op == OP_UNIT || v->op == OP_I || v->op == OP_SSET || v->op == OP_DIGEST || v->op == OP_LOGW)
     return RESOURCE_NONE;
   if (v->op == OP_OPTION && v->argc == 1u)
     return resource_shape(c, v->args[0], level);
@@ -3003,7 +3099,7 @@ static int print_result(Machine *m, const char *name, const Value *v, FILE *out,
     return 0;
   case VAL_TRAP:
     fputs("trap\n", out);
-    fprintf(err, "langc: EVAL_OVERFLOW: %s: a Nat operation overflowed past 2^64-1\n", name);
+    fprintf(err, "langc: EVAL_OVERFLOW: %s: a Nat operation trapped (overflow, division by 0, a position past the digest, a tweak field above 32 bits)\n", name);
     return 0;
   case VAL_OP:
     if (val_is(v, OP_TRUE) || val_is(v, OP_FALSE)) {
@@ -3035,6 +3131,11 @@ int eval_command(Machine *m, const char *name, char *const *args, int arg_count,
     diag_fail(m->diag, "EVAL_ENTRY", name, "no definition has this name");
     return 1;
   }
+  /* The hash ops compute only here (Q-S4-3 (a)). Drop the values that
+     check computed while they were stuck. */
+  m->hash = 1;
+  for (i = 0; i < m->def_count; i++)
+    m->defs[i].value = NULL;
   v = def_value(m, d);
   if (v == NULL)
     return 1;

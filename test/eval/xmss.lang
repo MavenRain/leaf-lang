@@ -1,0 +1,91 @@
+-- The XMSS tree functions at h = 4 (S4 U5, own vectors Q-S4-7 (a)). Each
+-- Bool row computes a value by a second path.
+s : Digest
+s = digest 1 2 3 4
+
+sk : Digest
+sk = digest 9 10 11 12
+
+skPrf : Digest
+skPrf = digest 13 14 15 16
+
+msg : Digest
+msg = digest 1311768467463790320 0 0 15
+
+pk4 : PubKey
+pk4 = pkFromSeeds sk s (v1Params 4)
+
+root4 : Digest
+root4 = witness pk4
+
+-- rootFromPath of leaf 0 and of leaf 9 with the auth path gives root4.
+path0 : Bool
+path0 = digestEq (rootFromPath s 4 0 (leafNode sk s 0) (authPath sk s 4 0)) root4
+
+path9 : Bool
+path9 = digestEq (rootFromPath s 4 9 (leafNode sk s 9) (authPath sk s 4 9)) root4
+
+-- Auth node 1 of leaf 5 is node 3 at height 1: the hash of leaves 6 and 7.
+auth5 : Digest
+auth5 = authPath sk s 4 5 (pack 1 refl)
+
+auth5Node : Bool
+auth5Node = digestEq auth5 (thNode s (pack 0 (pack 0 (pack 2 (pack 0 (pack 0 3))))) (leafNode sk s 6) (leafNode sk s 7))
+
+sig5 : Sig (height pk4)
+sig5 = signAt sk skPrf pk4 5 msg
+
+-- Chain value 0 of sig5 runs to the WOTS+ public value 0 of leaf 5.
+sigChain0 : Digest
+sigChain0 = witness (payload (payload sig5)) (pack 0 refl)
+
+sigChainPk : Bool
+sigChainPk = digestEq (chain s (wotsTweak 5 0) sigChain0 (wotsDigit (thMsg (witness (payload sig5)) root4 5 msg) 0) (natSub 15 (wotsDigit (thMsg (witness (payload sig5)) root4 5 msg) 0))) (wotsPk sk s 5 (pack 0 refl))
+
+good : Bool
+good = verify pk4 msg sig5
+
+badMsg : Bool
+badMsg = verify pk4 (digest 1311768467463790320 0 0 14) sig5
+
+badIndex : Bool
+badIndex = verify pk4 msg (pack 6 (payload sig5))
+
+-- n = 16 is not the v1 value.
+badN : Bool
+badN = verify (pack root4 (pack s (pack 16 (pack logW4 4)))) msg sig5
+
+-- h = 21 is above HMAX = 20 (Q-S4-U5-a (a)).
+tooHigh : Bool
+tooHigh = verify (pack root4 (pack s (v1Params 21))) msg (pack 5 (pack (witness (payload sig5)) (pack (witness (payload (payload sig5))) (λ f → root4))))
+
+-- The parts of sig5 for the negative rows (S4 U6).
+rand5 : Digest
+rand5 = witness (payload sig5)
+
+wots5 : Fin 67 → Digest
+wots5 = witness (payload (payload sig5))
+
+auth5Path : Fin (height pk4) → Digest
+auth5Path = payload (payload (payload sig5))
+
+-- Auth node 1 of sig5 changed to auth node 2.
+badAuth : Bool
+badAuth = verify pk4 msg (pack 5 (pack rand5 (pack wots5 (λ f → boolElim (λ b → Digest) (auth5Path (pack 2 refl)) (auth5Path f) (natEq (witness f) 1)))))
+
+-- The randomness of sig5 changed to another digest.
+badRand : Bool
+badRand = verify pk4 msg (pack 5 (pack s (payload (payload sig5))))
+
+-- The public seed of pk4 changed.
+badSeed : Bool
+badSeed = verify (pack root4 (pack (digest 1 2 3 5) (v1Params 4))) msg sig5
+
+-- The signature at leaf 16 = 2^h. verify has no index bound: rootFromPath
+-- gives node 1 at height 4, not the root (node 0).
+badLeaf : Bool
+badLeaf = verify pk4 msg (signAt sk skPrf pk4 16 msg)
+
+-- WOTS+ chain value 0 of sig5 changed to chain value 1.
+badChain : Bool
+badChain = verify pk4 msg (pack 5 (pack rand5 (pack (λ f → boolElim (λ b → Digest) (wots5 (pack 1 refl)) (wots5 f) (natEq (witness f) 0)) auth5Path)))

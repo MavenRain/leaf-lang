@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "front/check.h"
+#include "front/keccak.h"
 #include "front/lexer.h"
 #include "front/parser.h"
 
@@ -255,6 +256,21 @@ static int dump(const char *file) {
   return ok ? 0 : 1;
 }
 
+/* S4 U3a: Keccak-256 of the empty input is the EVM value. */
+static int keccak_empty(void) {
+  static const char want[] = "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470";
+  unsigned char d[32];
+  char hex[65];
+  size_t i;
+  keccak256((const unsigned char *)"", 0, d);
+  for (i = 0; i < 32u; i++)
+    snprintf(hex + 2u * i, 3, "%02x", d[i]);
+  if (strcmp(hex, want) == 0)
+    return 1;
+  fprintf(stderr, "FAIL keccak256 empty input: %s\n", hex);
+  return 0;
+}
+
 int main(int argc, char **argv) {
   if (argc == 3 && strcmp(argv[1], "dump") == 0) return dump(argv[2]);
   if (argc != 1) {
@@ -464,6 +480,39 @@ int main(int argc, char **argv) {
   ok &= domain("codata Bad (A : Type 0) : Type where\n  bh : Bad A → A\n  bn : Bad A → ℕ", "REFUSE_CELL");
   ok &= domain("codata Big (A : Type 0) : Type where\n  gh : Big A → A\n  gs : Big A → Type 0 → Big A", "REFUSE_CELL");
   ok &= domain("codata Nm (A : Type 0) : Type where\n  nm : (s : Nm A) → A", "PARSE_CTOR_RESULT");
+  /* S4 U2: digest words are args, so they convert word by word (R2). */
+  ok &= domain("p : Path Digest (digest 1 2 3 4) (digest 1 2 3 4)\np = refl", NULL);
+  ok &= domain("p : Path Digest (digest 1 2 3 4) (digest 1 2 3 5)\np = refl", "TYPE_REFL");
+  ok &= domain("q : Path Bool (digestEq (digest 1 2 3 4) (digest 1 2 3 4)) true\nq = refl", NULL);
+  ok &= domain("q : Path Bool (digestEq (digest 1 2 3 4) (digest 1 2 3 5)) false\nq = refl", NULL);
+  ok &= domain("r : Path ℕ (digit logW4 (digest 1 2 3 4) 15) 1\nr = refl", NULL);
+  ok &= domain("dup : Digest → Digest × Digest\ndup d = pack d d", NULL);
+  ok &= domain("dupW : LogW → LogW × LogW\ndupW w = pack w w", NULL);
+  /* S4 U4b: boolElim computes on true and false in check (Q-S4-U4-a). */
+  ok &= domain("r : Path ℕ (boolElim (λ b → ℕ) 1 2 false) 2\nr = refl", NULL);
+  ok &= domain("bad : ℕ\nbad = boolElim (λ b → ℕ) true 2 true", "TYPE_MISMATCH");
+  ok &= domain("bad : Type 0\nbad = boolElim (λ b → Type 0) ℕ ℕ true", "TYPE_MISMATCH");
+  /* Motives are checked at Bool -> Type 0, including names and aliases. */
+  ok &= domain("p : Bool → Type 0\np b = ℕ\n\nr : Path ℕ (boolElim p 1 2 false) 2\nr = refl", NULL);
+  ok &= domain("p : Bool → Type 0\np b = Path Bool b b\n\nr : Path Bool false false\nr = boolElim p refl refl false", NULL);
+  ok &= domain("Flag : Type 0\nFlag = Bool\n\nr : Path ℕ (boolElim (λ (b : Flag) → ℕ) 1 2 false) 2\nr = refl", NULL);
+  ok &= domain("choose : (@0 p : Bool → Type 0) → (x : p true) → (y : p false) → (b : Bool) → p b\nchoose p x y b = boolElim p x y b", NULL);
+  ok &= domain("p : ℕ → Type 0\np n = ℕ\n\nbad : ℕ\nbad = boolElim p 1 2 false", "TYPE_MISMATCH");
+  ok &= domain("choose : Bool → Leaf ⊸ Leaf\nchoose b l = boolElim (λ c → Leaf) l l b", NULL);
+  ok &= domain("bad : Bool → Leaf ⊸ Leaf × Leaf\nbad b l = pack (boolElim (λ c → Leaf) l l b) l", "REFUSE_AFFINE_REUSE");
+  /* Composition of the new base constants must compute as for Bool. */
+  ok &= domain("r : Path LogW (hcomp (λ j → []) logW1) logW1\nr = refl", NULL);
+  ok &= domain("r : Path LogW (hcomp (λ j → []) logW2) logW2\nr = refl", NULL);
+  ok &= domain("r : Path LogW (hcomp (λ j → []) logW4) logW4\nr = refl", NULL);
+  ok &= domain("r : Path LogW (hcomp (λ j → []) logW8) logW8\nr = refl", NULL);
+  ok &= domain("r : Path Digest (hcomp (λ j → []) (digest 1 2 3 4)) (digest 1 2 3 4)\nr = refl", NULL);
+  ok &= domain("r : (i : I) → Path Digest (hcomp (λ j → [ i ↦ digest 1 2 3 4 ]) (digest 1 2 3 4)) (digest 1 2 3 4)\nr i = refl", NULL);
+  /* S4 U3a: Keccak-256 of the empty input. */
+  ok &= keccak_empty();
+  /* S4 U3b, L6: in check a hash op stays stuck, also on digest values.
+     A Path to its Keccak value is refused; the same stuck term converts. */
+  ok &= domain("h : Path Digest (prf (digest 1 2 3 4) (pack 1 (pack 4294967298 (pack 3 (pack 4 (pack 5 6)))))) (digest 7828917002625406028 17928467574588468183 16839026010469504160 8590379313134116832)\nh = refl", "TYPE_REFL");
+  ok &= domain("h : Path Digest (prf (digest 1 2 3 4) (pack 0 (pack 0 (pack 0 (pack 0 (pack 0 0)))))) (prf (digest 1 2 3 4) (pack 0 (pack 0 (pack 0 (pack 0 (pack 0 0))))))\nh = refl", NULL);
   ok &= normal_roundtrip("glueType");
   ok &= normal_roundtrip("glueValue");
   ok &= normal_roundtrip("unglueValue");

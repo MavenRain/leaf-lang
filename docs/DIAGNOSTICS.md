@@ -84,7 +84,7 @@ reason. test/json/expect.txt holds the exact JSON lines of each fixture.
 | `EVAL_ARGS` | error | eval | The arguments of `langc eval` do not agree with the entry (count or range). | no fixture: `langc eval` has no JSON mode; test/gate.sh checks it (`eval_refused`) |
 | `EVAL_ENTRY` | error | eval | `langc eval` names no definition, or the entry does not compute a number. | no fixture: `langc eval` has no JSON mode; test/gate.sh checks it (`eval_refused`) |
 | `EVAL_PRINT` | error | eval | The value is too large to print. | no fixture: `langc eval` has no JSON mode; test/review.sh checks large.lang |
-| `EVAL_OVERFLOW` | error | eval | A ℕ operation overflows past 2^64-1. | no fixture: `langc eval` has no JSON mode; the `trap` lines of test/eval/expect.txt check it |
+| `EVAL_OVERFLOW` | error | eval | A ℕ operation traps: an overflow past 2^64-1, a division by 0, a `digit` position past the digest or a tweak field above 32 bits (Q-S4-U3-a). | no fixture: `langc eval` has no JSON mode; the `trap` lines of test/eval/expect.txt check it |
 | `EVAL_DEPTH` | error | eval, lowering | The evaluation or the lowering nests deeper than 2000 levels. | no fixture: no S1 `check` input reaches this limit, and `langc eval` has no JSON mode |
 | `EVAL_FUEL` | error | eval | The evaluation takes more than 20000000 steps. | no fixture: a fixture needs more than 20000000 steps, which is too slow for the gate |
 | `INTERNAL` | error | check, eval, lowering | An internal rule of `langc` fails. This is a defect in `langc`. | no fixture: no valid input reaches it |

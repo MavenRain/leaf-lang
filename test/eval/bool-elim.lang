@@ -1,0 +1,24 @@
+-- boolElim, the dependent Bool eliminator (S4 U4b, Q-S4-U4-a (a)), and
+-- finAt, which reads a Fin-indexed field at an index of type ℕ. An entry
+-- with a ℕ or Bool argument takes that argument, so a neutral scrutinee
+-- comes from a pair.
+onTrue : ℕ
+onTrue = boolElim (λ b → ℕ) 1 2 true
+
+onFalse : ℕ
+onFalse = boolElim (λ b → ℕ) 1 2 false
+
+onNeutral : (p : Bool × Unit) → ℕ
+onNeutral p = boolElim (λ c → ℕ) 1 2 (witness p)
+
+tens : (f : Fin 3) → ℕ
+tens f = natMul (witness f) 10
+
+atIn : ℕ
+atIn = finAt ℕ 3 tens 99 2
+
+atPast : ℕ
+atPast = finAt ℕ 3 tens 99 3
+
+atNeutral : (p : ℕ × Unit) → ℕ
+atNeutral p = finAt ℕ 3 tens 99 (witness p)

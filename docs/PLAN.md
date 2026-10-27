@@ -60,6 +60,20 @@ S2 slice):
   `Params` are top-level definitions of an iterated anonymous Sigma type
   (2.2, 3.2).
 
+USER rulings on the S4 questions (2026-10-26, AskUserQuestion in the S4
+sessions 1 and 2; the entries are in section 11):
+
+- S4 = (a) for each item, but Q-S4-1 = (c). Q-S4-0: S4 builds on the USER
+  commit 47a6f36. Q-S4-1: `cast keccak` is the only cross-check, for the
+  single hash calls; WOTS+, L-tree and Merkle use own vectors. Q-S4-2: a
+  builtin `digest` of four 64-bit words makes a digest value. Q-S4-3: the
+  hash ops compute only in `langc eval`. Q-S4-4: the tweak is the RFC 8391
+  ADRS, and only `prf` and `thMsg` have an RFC 8391 prefix (5.4). Q-S4-5:
+  the builtins `natDiv` and `natMod` join the Nat builtins (3.2). Q-S4-6:
+  the S4 signer is `pkFromSeeds` and `signAt`. Q-S4-7: L1 is an eval check
+  at h = 4, with L6 laws at concrete digits. Q-S4-8: v1 fixes n = 32 and
+  log2 w = 4, and the height is the index of `Sig` (3.2).
+
 Not ruled. The plan takes (a) for each of these:
 
 - Q2 kit: (a) by default; the USER did not rule it.
@@ -244,20 +258,25 @@ its type), law (a guest theorem, section 6).
 |---|---|---|---|---|
 | `Bool`, `true`, `false` | base type, base ops | | B1, B2 (a verify result) | S1 |
 | `Nat`, `zero`, `suc` | base type, base ops | | B1 (leaf index, chain step, height), B2 (nonce) | S1 |
-| `add`, `sub`, `mul`, `div`, `mod`, `lt`, `natEq` | defined | by `Nat` recursion; targets lower them to machine words (O8) | B1 (base-w digits, checksum, path bits) | S4 |
-| `Digest` | base type | `n` bytes, the hash output | B1 | S4 |
+| `natAdd`, `natSub`, `natMul`, `natDiv`, `natMod`, `natEq`, `natLe`, `lt` | base op (`lt` defined) | `Nat -> Nat -> Nat` (`natEq`, `natLe`, `lt`: `Nat -> Nat -> Bool`) on the machine word (uint64); overflow and division by 0 trap; `natSub` stops at 0; `lt k n = natLe (natAdd k 1) n` in `domain/domain.lang`; `natDiv` and `natMod` are new in S4, the others exist at 47a6f36 (Q-S4-5 (a), O8) | B1 (base-w digits, checksum, path bits) | S4 |
+| `Digest` | base type | 32 bytes (v1 n = 32, Q-S4-8 (a)), the hash output; copyable (resource class NONE) | B1 | S4 |
+| `LogW`, `logW1`, `logW2`, `logW4`, `logW8`, `logWBits` | base type, base ops | `LogW` is log2 w of WOTS+, copyable (resource class NONE); the values are `logW1`, `logW2`, `logW4`, `logW8`; `logWBits : LogW -> Nat` gives 1, 2, 4 or 8; no bad value exists, so there is no logW trap (Q-S4-U2-d) | B1 (base-w message encoding) | S4 |
+| `digest` | base op | `Nat -> Nat -> Nat -> Nat -> Digest`: four 64-bit big-endian words, `w0` = bytes 0..7; a closed hash result is a `digest` value, and the printer prints `digest w0 w1 w2 w3`; no lexer change (Q-S4-2 (a)) | B1 (seeds, vectors) | S4 |
 | `digestEq` | base op | `Digest -> Digest -> Bool`; obligation: decides `Path Digest` | B1 (verify compares a root) | S4 |
-| `digit` | base op | `Nat -> Digest -> Nat -> Nat` (log2 w, digest, position); obligation: result `< w` | B1 (base-w message encoding) | S4 |
-| `Tweak` | defined | iterated Sigma of `Nat`: layer, tree, kind, leaf, chain, step | B1 (RFC 8391 address) | S4 |
+| `digit` | base op | `LogW -> Digest -> Nat -> Nat` (log2 w, digest, position): the RFC 8391 base_w digit, from byte 0 and the most significant bits first; a position past the digest traps (Q-S4-U2-a, Q-S4-U2-d); obligation: result `< w` | B1 (base-w message encoding) | S4 |
+| `Tweak` | defined | the right-nested iterated Sigma `(layer : Nat) × (tree : Nat) × (kind : Nat) × (leaf : Nat) × (chain : Nat) × Nat` (the last part is step); a value is `pack layer (pack tree (pack kind (pack leaf (pack chain step))))`; `thChain`, `thNode` and `prf` take this Sigma and pack it as the 32-byte RFC 8391 ADRS (5.4, Q-S4-4 (a), Q-S4-U3-b) | B1 (RFC 8391 address) | S4 |
 | `thChain` | hash op | `Digest -> Tweak -> Digest -> Digest` (public seed, tweak, value) | B1 (WOTS+ chain step F) | S4 |
 | `thNode` | hash op | `Digest -> Tweak -> Digest -> Digest -> Digest` | B1 (L-tree and Merkle node H) | S4 |
 | `thMsg` | hash op | `Digest -> Digest -> Nat -> Digest -> Digest` (randomness, root, index, message) | B1 (H_msg) | S4 |
 | `prf` | hash op | `Digest -> Tweak -> Digest` (secret seed, tweak) | B1 (WOTS+ secret keys, signing randomness) | S4 |
-| `Params` | defined | iterated Sigma: `n`, `logW`, `h` (section 5.4) | B1, B3 | S4 |
-| `chain`, `wotsPk`, `wotsSign`, `wotsPkFromSig`, `ltree`, `treeHash`, `authPath`, `rootFromPath` | defined | RFC 8391 algorithms over the hash ops | B1 | S4 |
-| `PubKey` | defined | iterated Sigma: `root`, `pubSeed`, `params` | B1, B2 | S4 |
-| `Sig` | defined | iterated Sigma: `index : Nat`, `rand : Digest`, `wots : Fin len -> Digest`, `auth : Fin h -> Digest` | B1, B2 | S4 |
-| `verify` | defined | `PubKey -> Digest -> Sig -> Bool` | B1, B2 | S4 |
+| `Params` | defined | iterated Sigma: `n : Nat`, `logW : LogW`, `h : Nat` (section 5.4, Q-S4-U2-d); the definitions fix n = 32 and logW = 4 (len = 67); `n` and `logW` stay for the EIP-8310 JSON (Q-S4-8 (a)) | B1, B3 | S4 |
+| `chain`, `wotsPk`, `wotsSign`, `wotsPkFromSig`, `ltree`, `treeHash`, `authPath`, `rootFromPath` | defined | RFC 8391 algorithms over the hash ops; `ltree` and `treeNode` by fixed nesting (`lTreeUp`, `up`, `lv0` to `lv20`), HMAX = 20; above HMAX, `verify` gives false (section 4.1, Q-S4-U5-a (a)) | B1 | S4 |
+| `pkFromSeeds` | defined | `(skSeed : Digest) -> (pubSeed : Digest) -> (p : Params) -> PubKey`; S5 `keygen` uses it (Q-S4-6 (a)) | B1, B3 | S4 |
+| `signAt` | defined | `(skSeed : Digest) -> (skPrf : Digest) -> (pk : PubKey) -> (i : Nat) -> (m : Digest) -> Sig (height pk)`; S5 `sign` calls it through the sealed `Leaf` eliminator (Q-S4-6 (a), Q-S4-8 (a)) | B1, B4 | S4 |
+| `PubKey` | defined | iterated Sigma: `root`, `pubSeed`, `params`; `height : PubKey -> Nat` gives the `h` field of `params` (Q-S4-8 (a)) | B1, B2 | S4 |
+| `Sig` | defined | `(h : Nat) -> Type 0`, an iterated Sigma: `index : Nat`, `rand : Digest`, `wots : Fin 67 -> Digest`, `auth : Fin h -> Digest` (Q-S4-8 (a)) | B1, B2 | S4 |
+| `boolElim` | base op | `(P : Bool -> Type 0) -> P true -> P false -> (b : Bool) -> P b`, the dependent Bool eliminator: it computes on `true` and `false`, and a neutral `b` stays stuck; the domain `finAt` uses it to read a `Fin n` field at a fold counter (Q-S4-U4-a (a)) | B1 (the 67 chains, the h auth nodes) | S4 |
+| `verify` | defined | `(pk : PubKey) -> Digest -> Sig (height pk) -> Bool`; false when `n` or `logW` is not the v1 value (Q-S4-8 (a)) | B1, B2 | S4 |
 | `Leaf` | resource | one unused one-time key; a core base type with no constructor and no eliminator in S3 (Q-S3-7 (a)); sealed: only `next` makes one (`REFUSE_SEALED`) | B4 | S3 |
 | `Keystore` | resource | the secret seeds, the public key and the signing position; a sealed domain definition `Stream (Option Leaf)` (Q4 (a), Q-S3-7 (a)); a program that unfolds it (a `Stream` observation or `D.corec` at `Keystore`) gets `REFUSE_SEALED` | B4, R4 (EIP-8310) | S3 |
 | `Durable` | CM (domain) | section 2.2 | B4 (commit-before-sign) | S3 |
@@ -480,16 +499,38 @@ x)`, one call per step (the SPHINCS+ "simple" shape). v1 parameters (Q7
 (a)): n = 32, log2 w = 4, h a parameter; the gate uses h = 4 and h = 10;
 the default for an account is h = 16 (65536 transactions).
 
+v1 byte layout (Q-S4-4 (a)). The tweak is the RFC 8391 ADRS: 32 bytes, 8
+big-endian 32-bit words: layer, tree (2 words), kind, leaf, chain, step,
+0. A field above its width traps. `toByte(v, 32)` is `v` as 32 big-endian
+bytes. A digest value `digest w0 w1 w2 w3` is 32 bytes: each word gives 8
+big-endian bytes, `w0` first (Q-S4-2 (a)).
+
+- `thChain`: Keccak-256(`pubSeed || ADRS || x`), 96 bytes.
+- `thNode`: Keccak-256(`pubSeed || ADRS || l || r`), 128 bytes.
+- `prf`: Keccak-256(`toByte(3, 32) || key || ADRS`), 96 bytes.
+- `thMsg`: Keccak-256(`toByte(2, 32) || r || root || toByte(index, 32) ||
+  m`), 160 bytes.
+
+Only `prf` and `thMsg` have the RFC 8391 prefix. The EVM verifier calls
+`thMsg` one time and does not call `prf`, so the chain steps stay at 96
+bytes and the 5.1 gas plan does not change.
+
+Hash binding (Q-S4-3 (a)). The hash ops compute only in `langc eval` (a
+Machine flag that `langc eval` sets). In `check` and in conversion they
+stay stuck, also on `digest` values, so no law can use a Keccak output
+(L6). `digestEq` and `digit` are not hash ops: they compute on `digest`
+values everywhere.
+
 ## 6. Laws (guest terms)
 
 | Law | Statement | Slice |
 |---|---|---|
-| L1 correctness | for each keystore `ks` and message `m`, when `next ks` gives `(l, ks')`, `verify (pk ks) m (sign l m)` is `true` | S4, S5 |
+| L1 correctness | for each keystore `ks` and message `m`, when `next ks` gives `(l, ks')`, `verify (pk ks) m (sign l m)` is `true` | S4 (U6: an eval check at h = 4 on the guest form `verify pk4 m (signAt sk skPrf pk4 i m)` for i = 0 to 15, test/eval/laws.lang), S5 (the keystore form) |
 | L2 nonce binding | `accept pk k m s` is `true` implies `index s` is `k` | S6 |
 | L3 commit-before-sign | in each `Durable` tree, each `sign` of a leaf with index `i` is under a `commit` node that writes `i + 1` | S5 |
 | L4 no reset | the committed positions on each path of a `Durable` tree increase strictly | S5 |
 | L5 distinct leaves | two signatures that one program makes have different indices (from the affine check and L4) | S5 |
-| L6 binding independence | the kernel never unfolds a hash op, so each law that checks holds for each binding | S4 |
+| L6 binding independence | the kernel never unfolds a hash op, so each law that checks holds for each binding | S4 (U6: test/check/hash-node.lang, hash-root.lang and hash-verify.lang refuse with `TYPE_REFL`, because the hash ops stay stuck in check) |
 | L7 aggregation | the zkml statement holds exactly when `aggregate` is `true` (at the zkml-lang semantics) | S7 |
 
 Outside the denotation (assumptions, not laws): EUF-CMA security of XMSS
@@ -569,7 +610,7 @@ on the new checks, docs, close (stage, commit message, next prompt).
 | S1 | surface: Agda-like Unicode (Q14 (b), 7.1), named steps as top-level definitions, `langc fmt`, `W_NONCANON`; `check --json` with progress counts; drop the refused kit names | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 9; check refusals 18; evals 30; ir 10 lowered; wasm 13 modules valid; differential 772 cases, 0 mismatches; fmt 50 canonical, 3 non-canonical pairs (round trip and idempotence); json 20 fixtures, diagnostics 31 codes (18 with a fixture, 13 with no fixture); gate 0 failures; review and domain regressions passed; mutants M1 to M6 killed (docs/STATUS.md, S1) |
 | S2 | kernel port: Path, Sigma, Pi, U, `I`, `transp`, `hcomp`, `Glue` and `ua` (S2-Q1 (a)), O18 (kit Ops removed, U2), no `record` form (S2-Q3 (b)), `Sum` as a domain CM (S2-Q2 (b), done in U6b2), `REFUSE_CELL`, cofamily (`codata` keyword and shape check done in U6c1), `Fin` (domain defs `lt` and `Fin`, done in U7) | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 10; check refusals 32; evals 64; ir 10 lowered; wasm 13 modules valid; differential 773 cases, 0 mismatches; fmt 78 canonical, 5 non-canonical pairs (round trip and idempotence); json 28 fixtures, diagnostics 41 codes (26 with a fixture, 15 with no fixture); gate 0 failures; review and domain regressions passed; `REFUSE_CELL` mutants C1, C1w, C2, C3 and mutants U6c2b, U7-M1 killed (docs/STATUS.md, S2) |
 | S3 | affine layer: multiplicities, `-o`, resource sorts, sealed `Leaf` and `Keystore`, `Durable` (a spine: one recursive field in each constructor, O-U6b-1 (a)), the five refusal codes | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 12; check refusals 35; evals 70; ir 10 lowered; wasm 13 modules valid; differential 773 cases, 0 mismatches; fmt 91 canonical, 6 non-canonical pairs (round trip and idempotence); json 33 fixtures, diagnostics 46 codes (31 with a fixture, 15 with no fixture); gate 0 failures; review and domain regressions passed; one JSON fixture for each S3 code; 14 mutants on the five S3 refusals and the two `Durable` branches, 14 of 14 killed (docs/STATUS.md, S3) |
-| S4 | `Digest`, hash ops (opaque), WOTS+, L-tree, Merkle, `sign`, `verify`; reference Keccak in `langc eval`; L1, L6 | own vectors plus a cross-check with an independent implementation; L1 at h = 4 |
+| S4 | `Digest`, hash ops (opaque), WOTS+, L-tree, Merkle, `sign`, `verify`; reference Keccak in `langc eval`; L1, L6 | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 12; check refusals 38; evals 142; ir 10 lowered; wasm 13 modules valid; differential 773 cases, 0 mismatches; fmt 101 canonical, 6 non-canonical pairs (round trip and idempotence); json 33 fixtures, diagnostics 46 codes (31 with a fixture, 15 with no fixture); gate 0 failures; review and domain regressions passed; own vectors plus a cross-check of each hash op with `cast keccak` (Q-S4-1 (c)); L1 at h = 4 for i = 0 to 15 (test/eval/laws.lang); L6: three `check` rows refuse with `TYPE_REFL`; 10 mutants on the S4 checks, 10 of 10 killed (docs/STATUS.md, S4) |
 | S5 | `keygen`, `publicKey`, `next`, `commit`; Wasm signer (Keccak in the module, `commit` import, EIP-8310 JSON in the harness); L3 to L5 | differential eval against Wasm; reset refused |
 | S6 | EVM verifier: ERC-4337 entry, EIP-8141 entry with the shim, nonce binding L2; measured gas | bytecode runs in the kit EVM harness; wrong nonce and wrong root revert |
 | S7 | Poseidon2 binding (field of Q10) in `langc eval` and the zkml writer; `aggregate`; L7 | zkml-lang accepts the output; Poseidon2 vectors |
@@ -591,8 +632,9 @@ on the new checks, docs, close (stage, commit message, next prompt).
   `split`). Q12.
 - O6: zeroize the secrets of a dropped leaf in the Wasm module.
 - O7: `Digest` as a base type or as `Fin n -> Byte`.
-- O8: the targets lower the `Nat` definitions (`div`, `mod`) to machine
-  words. The lowering is trusted, as zkml-lang `natDiv`.
+- O8: the targets lower the `Nat` builtins (`natDiv`, `natMod` and the
+  others, Q-S4-5 (a)) to machine words. The lowering is trusted, as
+  zkml-lang `natDiv`.
 - O9: `REFUSE_AFFINE_PATH` can be too strict for a path whose end points
   are equal by definition. S3 records each refused case it meets.
 - O10: calldata of about 2.7 KB per signature against the EIP-7623 floor.
@@ -729,3 +771,102 @@ ruled each one.
   each constructor (a spine, as `Durable`; else `DOMAIN_FAMILY`); trees
   at the own parameters are a later slice item (docs/STATUS.md, S3).
   (b) admit trees in S3.
+
+S4 questions (S4-HANDOFF section 3). Marks (2026-10-26, S4 sessions 1
+and 2): the USER ruled each one. For Q-S4-0 and Q-S4-1 (session 1) this
+block keeps only the ruled option.
+
+- Q-S4-0 S4 base. RULED (a). (a) build on the USER commit 47a6f36 (tree
+  71ded360: S3 and the USER "Staged S3 review fixes").
+- Q-S4-1 cross-check. RULED (c). (c) Foundry `cast keccak` only, for the
+  single hash calls `thChain`, `thNode`, `thMsg` and `prf`; WOTS+, L-tree
+  and Merkle use own vectors only.
+- Q-S4-2 digest values. RULED (a). (a) a builtin `digest : ℕ → ℕ → ℕ → ℕ →
+  Digest` (four 64-bit big-endian words, w0 = bytes 0..7); a closed hash
+  result is a `digest` value; the printer prints `digest w0 w1 w2 w3`; no
+  lexer change. (b) a hex literal token `0x` and 64 hex digits (lexer,
+  parser, fmt, printer). (c) (a) and (b).
+- Q-S4-3 where the hash binds. RULED (a). (a) the hash ops compute only in
+  `langc eval` (a Machine flag that `langc eval` sets); in `check` and in
+  conversion they stay stuck, also on `digest` values (L6: no law can use
+  a Keccak output); `digestEq` and `digit` are not hash ops and compute on
+  `digest` values everywhere (5.4). (b) the hash ops compute on literals
+  everywhere; L6 holds only for neutral arguments.
+- Q-S4-4 byte layout (Q6 (a) `Keccak-256(seed || tweak || x)`). RULED
+  (a). (a) the tweak is the RFC 8391 ADRS, 32 bytes, 8 big-endian 32-bit
+  words: layer, tree (2 words), kind, leaf, chain, step, 0; a field above
+  its width traps. thChain = Keccak(pubSeed || ADRS || x), 96 bytes;
+  thNode = Keccak(pubSeed || ADRS || l || r), 128 bytes; prf =
+  Keccak(toByte(3, 32) || key || ADRS), 96 bytes; thMsg = Keccak(toByte(2,
+  32) || r || root || toByte(index, 32) || m), 160 bytes (5.4). (b) the
+  same with no prefixes. (c) RFC 8391 prefixes on each call (a chain step
+  is 128 bytes; this changes the 5.1 gas plan).
+- Q-S4-5 Nat operations. RULED (a). (a) keep the builtins `natAdd`,
+  `natSub`, `natMul`, `natEq`, `natLe` and the domain `lt`; add the
+  builtins `natDiv` and `natMod` (RULE_NAT2; division by 0 traps, as
+  overflow does; O8); the 3.2 row has these names. (b) domain definitions
+  with the names `add`, `sub`, `mul`, `div`, `mod` (by fold; slow; `natEq`
+  stays a builtin).
+- Q-S4-6 signing in S4 (no Leaf source before S5 `next`). RULED (a). (a)
+  domain definitions `pkFromSeeds : (skSeed : Digest) → (pubSeed : Digest)
+  → (p : Params) → PubKey` and `signAt : (skSeed : Digest) → (skPrf :
+  Digest) → (pk : PubKey) → (i : ℕ) → (m : Digest) → Sig (height pk)` (the
+  index is from Q-S4-8 (a)); S5 `sign : Leaf ⊸ Digest → Sig` calls
+  `signAt` through the sealed `Leaf` eliminator, and S5 `keygen` uses
+  `pkFromSeeds`. (b) the RFC 8391 names `xmssPk` and `treeSig`. (c) no S4
+  signer; S4 tests `verify` on vectors only.
+- Q-S4-7 L1 at h = 4. RULED (a). (a) L1 is an eval check at the Keccak
+  binding: a guest entry runs `verify (pkFromSeeds ..) m (signAt .. i m)`
+  for each of the 16 indices and three messages and gives 1; negative rows
+  (wrong index, wrong message, wrong root, one flipped auth node) give 0.
+  L6 evidence: guest laws at concrete digits with neutral seeds (chain
+  composition `chain (chain x 0 a) a b ≡ chain x 0 (a + b)` for literal
+  `a`, `b`) check at 0; a check fixture where a Path needs a hash
+  unfolding is refused (`TYPE_MISMATCH`). (b) a dependent eliminator for ℕ
+  (a new RULE) and a proof of L1 for all messages (a large kernel change;
+  the `digit` bound becomes an obligation that the kernel trusts). (c) the
+  eval check only.
+- Q-S4-8 the parameters in the types. RULED (a). (a) v1 fixes n = 32 and
+  log2 w = 4 (len = 67) in the definitions; `Params` keeps the three
+  fields `n`, `logW`, `h` for the EIP-8310 JSON, and `verify` gives false
+  when `n` or `logW` is not the v1 value; the height is the index of `Sig`
+  and of the auth path: `Sig : (h : ℕ) → Type 0` with `wots : Fin 67 →
+  Digest` and `auth : Fin h → Digest`; `verify : (pk : PubKey) → Digest →
+  Sig (height pk) → Bool`. (b) `Params` holds only `h`. (c) each
+  definition has the full `Params` as its index. The S5 rows (`sign` in
+  3.2, L1 in section 6) get the index `Sig (height pk)` in S5.
+- Q-S4-U2-a the bit order of `digit`. RULED (a) (S4 U2). (a) RFC 8391
+  base_w: from byte 0, the most significant bits first.
+- Q-S4-U2-b the lowering of the S4 names. RULED (a). (a) the existing
+  path: `Digest` and `LogW` go with `Leaf`, and an operation gets "an
+  operation with no IR form (O8)"; no new IR code.
+- Q-S4-U2-c the print of a Digest result. RULED (a). (a) `digest w0 w1 w2
+  w3`.
+- Q-S4-U2-d the type of log2 w. RULED (a). (a) a base type `LogW`
+  (copyable) with the values `logW1`, `logW2`, `logW4`, `logW8` and
+  `logWBits : LogW → ℕ`; `digit : LogW → Digest → ℕ → ℕ`; the `Params`
+  field `logW : LogW`. No bad logW exists, so there is no logW trap.
+- Q-S4-U3-a the text of a trap (O-U2-1). RULED (a) (S4 U3). (a) the code
+  stays `EVAL_OVERFLOW`, and the text is "a Nat operation trapped
+  (overflow, division by 0, a position past the digest, a tweak field above
+  32 bits)". (b) the old text. (c) a new code `EVAL_TRAP`.
+- Q-S4-U3-b the guest form of `Tweak`. RULED (a). (a) the right-nested
+  Sigma `(layer : ℕ) × (tree : ℕ) × (kind : ℕ) × (leaf : ℕ) × (chain : ℕ) ×
+  ℕ` (the last part is step); `thChain`, `thNode` and `prf` take it, and
+  the domain name `Tweak` (U4) converts to it. (b) a core base type
+  `Tweak` with a builtin `tweak`.
+- Q-S4-U4-a how a fold reads a `Fin`-indexed field. RULED (a) (S4 U4).
+  `fold step z n` iterates over ℕ, but its counter is neutral in check, so
+  no term makes a `Fin n` element from it (`flagIf` is not dependent).
+  (a) a kernel op `boolElim : (P : Bool → Type 0) → P true → P false → (b
+  : Bool) → P b` (it computes on `true` and `false`; a neutral `b` stays
+  stuck); the domain defines `finAt`, and `Sig` keeps `Fin 67` and `Fin
+  h`. (b) `ℕ → Digest` fields in `Sig`. (c) 67 unrolled `wots` cases and
+  `auth : ℕ → Digest`.
+- Q-S4-U5-a the form of `ltree` and `treeNode`. RULED (a) by the USER
+  (S4 U5b, 2026-10-27). (a) fixed nesting. `ltree` is 7 fixed levels
+  (len 67 is fixed in v1). `treeNode` selects one of the heights 0 to
+  HMAX by a `boolElim` chain over fixed-nesting levels. Above HMAX,
+  `treeNode` gives a fixed digest, and `verify` gives false. There is no
+  checker change: the affine rule (section 4.1) stays. HMAX = 20 (the
+  largest RFC 8391 XMSS height).

@@ -1,0 +1,29 @@
+-- thChain, thNode, thMsg and prf (S4 U3, PLAN 5.4). They compute only in
+-- langc eval (Q-S4-3 (a)). The tweak is the RFC 8391 ADRS, and tree is two
+-- words (Q-S4-4 (a)). Each digest in expect.txt is from cast keccak.
+s : Digest
+s = digest 1 2 3 4
+
+x : Digest
+x = digest 5 6 7 8
+
+t : (layer : ℕ) × (tree : ℕ) × (kind : ℕ) × (leaf : ℕ) × (chain : ℕ) × ℕ
+t = pack 1 (pack 4294967298 (pack 3 (pack 4 (pack 5 6))))
+
+chain1 : Digest
+chain1 = thChain s t x
+
+node1 : Digest
+node1 = thNode s t x s
+
+msg1 : Digest
+msg1 = thMsg s x 7 s
+
+prf1 : Digest
+prf1 = prf s t
+
+wide : Bool
+wide = digestEq (thChain s (pack 4294967296 (pack 0 (pack 0 (pack 0 (pack 0 0))))) x) s
+
+stuck : Digest → Digest
+stuck y = thChain s t y

@@ -82,3 +82,249 @@ codata Stream (A : Type 0) : Type where
 -- tail at Keystore) or builds it (the private corecursor) is REFUSE_SEALED.
 Keystore : Type 0
 Keystore = Stream (Option Leaf)
+
+-- The WOTS+ and XMSS types (S4 U4a, Q-S4-8 (a)). Tweak is the RFC 8391
+-- ADRS as a Σ (Q-S4-U3-b): layer, tree, kind, leaf, chain, then step. It
+-- converts to the argument type of thChain, thNode and prf.
+Tweak : Type 0
+Tweak = (layer : ℕ) × (tree : ℕ) × (kind : ℕ) × (leaf : ℕ) × (chain : ℕ) × ℕ
+
+-- The parameters: n, log2 w and the height h. v1 is n = 32 and log2 w = 4
+-- (w = 16, len = 67).
+Params : Type 0
+Params = (n : ℕ) × (logW : LogW) × ℕ
+
+v1Params : (h : ℕ) → Params
+v1Params h = pack 32 (pack logW4 h)
+
+-- The public key: the root, the public seed and the parameters.
+PubKey : Type 0
+PubKey = (root : Digest) × (pubSeed : Digest) × Params
+
+height : (pk : PubKey) → ℕ
+height pk = payload (payload (payload (payload pk)))
+
+-- A signature at height h: the leaf index, the randomness, the 67 WOTS+
+-- chain values and the h auth nodes.
+Sig : (h : ℕ) → Type 0
+Sig h = (index : ℕ) × (rand : Digest) × (wots : Fin 67 → Digest) × (Fin h → Digest)
+
+-- finAt A n f d k reads the Fin-indexed field f at the index k : ℕ, and
+-- gives d past the end (Q-S4-U4-a (a)). A fold counter is neutral in
+-- check, so boolElim takes the proof that lt k n is true into the pack.
+finAt : (A : Type 0) → (n : ℕ) → (f : Fin n → A) → (d : A) → (k : ℕ) → A
+finAt A n f d k = boolElim (λ b → Path Bool (lt k n) b → A) (λ p → f (pack k p)) (λ p → d) (lt k n) refl
+
+-- withStep t k is the tweak t with the step word set to k.
+withStep : (t : Tweak) → (k : ℕ) → Tweak
+withStep t k = pack (witness t) (pack (witness (payload t)) (pack (witness (payload (payload t))) (pack (witness (payload (payload (payload t)))) (pack (witness (payload (payload (payload (payload t))))) k))))
+
+-- The fold states of chain and of the counts. A pack in a fold needs a
+-- declared type, so these give it.
+chainState : (k : ℕ) → (v : Digest) → ℕ × Digest
+chainState k v = pack k v
+
+natPair : (a : ℕ) → (b : ℕ) → ℕ × ℕ
+natPair a b = pack a b
+
+-- chain seed t x start steps is the RFC 8391 chain: it applies thChain
+-- steps times to x. The fold state is the step counter and the value. The
+-- counter starts at start, and each step sets the tweak step word to it.
+chain : (seed : Digest) → (t : Tweak) → (x : Digest) → (start : ℕ) → (steps : ℕ) → Digest
+chain seed t x start steps = payload (fold (λ (st : ℕ × Digest) → chainState (natAdd (witness st) 1) (thChain seed (withStep t (witness st)) (payload st))) (chainState start x) steps)
+
+-- The WOTS+ tweak of chain c in the one-time key ots: layer 0, tree 0,
+-- kind 0 and step 0.
+wotsTweak : (ots : ℕ) → (c : ℕ) → Tweak
+wotsTweak ots c = pack 0 (pack 0 (pack 0 (pack ots (pack c 0))))
+
+-- The secret start of chain c.
+wotsSk : (skSeed : Digest) → (ots : ℕ) → (c : ℕ) → Digest
+wotsSk skSeed ots c = prf skSeed (wotsTweak ots c)
+
+-- The checksum of the 64 message digits: the sum of 15 - digit.
+wotsCsum : (m : Digest) → ℕ
+wotsCsum m = payload (fold (λ (st : ℕ × ℕ) → natPair (natAdd (witness st) 1) (natAdd (payload st) (natSub 15 (digit logW4 m (witness st))))) (natPair 0 0) 64)
+
+-- Checksum digit j of 3: RFC 8391 shifts csum left by 4 bits and takes 3
+-- base-w digits.
+wotsCsumDigit : (csum : ℕ) → (j : ℕ) → ℕ
+wotsCsumDigit csum j = boolElim (λ b → ℕ) (natDiv csum 256) (boolElim (λ b → ℕ) (natMod (natDiv csum 16) 16) (natMod csum 16) (natEq j 1)) (natEq j 0)
+
+-- Digit i of 67: the message digit when i < 64, else a checksum digit.
+-- Each arm takes a dummy argument, so eval computes only one arm.
+wotsDigit : (m : Digest) → (i : ℕ) → ℕ
+wotsDigit m i = boolElim (λ b → ℕ → ℕ) (λ u → digit logW4 m i) (λ u → wotsCsumDigit (wotsCsum m) (natSub i 64)) (lt i 64) 0
+
+-- The public key: chain c runs w - 1 = 15 steps from the secret start.
+wotsPk : (skSeed : Digest) → (pubSeed : Digest) → (ots : ℕ) → (f : Fin 67) → Digest
+wotsPk skSeed pubSeed ots f = chain pubSeed (wotsTweak ots (witness f)) (wotsSk skSeed ots (witness f)) 0 15
+
+-- The signature of m: chain c runs digit c steps from the secret start.
+wotsSign : (skSeed : Digest) → (pubSeed : Digest) → (ots : ℕ) → (m : Digest) → (f : Fin 67) → Digest
+wotsSign skSeed pubSeed ots m f = chain pubSeed (wotsTweak ots (witness f)) (wotsSk skSeed ots (witness f)) 0 (wotsDigit m (witness f))
+
+-- The public key from a signature: chain c runs the 15 - digit c steps
+-- that are left. For a correct signature, this is wotsPk.
+wotsPkFromSig : (pubSeed : Digest) → (ots : ℕ) → (m : Digest) → (ws : Fin 67 → Digest) → (f : Fin 67) → Digest
+wotsPkFromSig pubSeed ots m ws f = chain pubSeed (wotsTweak ots (witness f)) (ws f) (wotsDigit m (witness f)) (natSub 15 (wotsDigit m (witness f)))
+
+-- The L-tree and hash tree tweaks (RFC 8391 ADRS). In the L-tree (kind 1)
+-- the leaf word is the L-tree address; in the hash tree (kind 2) it is 0.
+-- The chain word is the tree height and the step word is the tree index.
+lTreeTweak : (ots : ℕ) → (k : ℕ) → (j : ℕ) → Tweak
+lTreeTweak ots k j = pack 0 (pack 0 (pack 1 (pack ots (pack k j))))
+
+nodeTweak : (k : ℕ) → (j : ℕ) → Tweak
+nodeTweak k j = pack 0 (pack 0 (pack 2 (pack 0 (pack k j))))
+
+-- lTreeUp pubSeed ots k len g j is node j at level k + 1 of the L-tree
+-- (RFC 8391 Algorithm 16), from the len nodes g of level k. When node
+-- 2j + 1 is in level k, the node is the hash of the nodes 2j and 2j + 1.
+-- Else the odd last node 2j moves up with no hash. Each arm takes a dummy
+-- argument, so eval computes only one arm.
+lTreeUp : (pubSeed : Digest) → (ots : ℕ) → (k : ℕ) → (len : ℕ) → (g : ℕ → Digest) → (j : ℕ) → Digest
+lTreeUp pubSeed ots k len g j = boolElim (λ b → ℕ → Digest) (λ u → thNode pubSeed (lTreeTweak ots k j) (g (natMul 2 j)) (g (natAdd (natMul 2 j) 1))) (λ u → g (natMul 2 j)) (lt (natAdd (natMul 2 j) 1) len) 0
+
+-- ltree pubSeed ots pk is the L-tree root of the 67 WOTS+ public values by
+-- fixed nesting (len 67 is fixed in v1, Q-S4-U5-a (a)): len 67, 34, 17,
+-- 9, 5, 3, 2 and 1 in 7 levels.
+ltree : (pubSeed : Digest) → (ots : ℕ) → (pk : Fin 67 → Digest) → Digest
+ltree pubSeed ots pk = lTreeUp pubSeed ots 6 2 (lTreeUp pubSeed ots 5 3 (lTreeUp pubSeed ots 4 5 (lTreeUp pubSeed ots 3 9 (lTreeUp pubSeed ots 2 17 (lTreeUp pubSeed ots 1 34 (lTreeUp pubSeed ots 0 67 (λ j → finAt Digest 67 pk pubSeed j))))))) 0
+
+-- The leaf i: the L-tree root of the WOTS+ public key i.
+leafNode : (skSeed : Digest) → (pubSeed : Digest) → (i : ℕ) → Digest
+leafNode skSeed pubSeed i = ltree pubSeed i (wotsPk skSeed pubSeed i)
+
+-- up pubSeed k g q is node q at height k + 1 of the hash tree: the hash of
+-- the nodes 2q and 2q + 1 of the level g at height k, with the tree height
+-- k and the tree index q.
+up : (pubSeed : Digest) → (k : ℕ) → (g : ℕ → Digest) → (q : ℕ) → Digest
+up pubSeed k g q = thNode pubSeed (nodeTweak k q) (g (natMul 2 q)) (g (natAdd (natMul 2 q) 1))
+
+-- lvK skSeed pubSeed q is node q at height K of the hash tree, by fixed
+-- nesting of up to the height HMAX = 20 (Q-S4-U5-a (a)). Each node has
+-- one parent, so eval computes each node one time.
+lv0 : (skSeed : Digest) → (pubSeed : Digest) → (q : ℕ) → Digest
+lv0 skSeed pubSeed q = leafNode skSeed pubSeed q
+
+lv1 : (skSeed : Digest) → (pubSeed : Digest) → (q : ℕ) → Digest
+lv1 skSeed pubSeed q = up pubSeed 0 (lv0 skSeed pubSeed) q
+
+lv2 : (skSeed : Digest) → (pubSeed : Digest) → (q : ℕ) → Digest
+lv2 skSeed pubSeed q = up pubSeed 1 (lv1 skSeed pubSeed) q
+
+lv3 : (skSeed : Digest) → (pubSeed : Digest) → (q : ℕ) → Digest
+lv3 skSeed pubSeed q = up pubSeed 2 (lv2 skSeed pubSeed) q
+
+lv4 : (skSeed : Digest) → (pubSeed : Digest) → (q : ℕ) → Digest
+lv4 skSeed pubSeed q = up pubSeed 3 (lv3 skSeed pubSeed) q
+
+lv5 : (skSeed : Digest) → (pubSeed : Digest) → (q : ℕ) → Digest
+lv5 skSeed pubSeed q = up pubSeed 4 (lv4 skSeed pubSeed) q
+
+lv6 : (skSeed : Digest) → (pubSeed : Digest) → (q : ℕ) → Digest
+lv6 skSeed pubSeed q = up pubSeed 5 (lv5 skSeed pubSeed) q
+
+lv7 : (skSeed : Digest) → (pubSeed : Digest) → (q : ℕ) → Digest
+lv7 skSeed pubSeed q = up pubSeed 6 (lv6 skSeed pubSeed) q
+
+lv8 : (skSeed : Digest) → (pubSeed : Digest) → (q : ℕ) → Digest
+lv8 skSeed pubSeed q = up pubSeed 7 (lv7 skSeed pubSeed) q
+
+lv9 : (skSeed : Digest) → (pubSeed : Digest) → (q : ℕ) → Digest
+lv9 skSeed pubSeed q = up pubSeed 8 (lv8 skSeed pubSeed) q
+
+lv10 : (skSeed : Digest) → (pubSeed : Digest) → (q : ℕ) → Digest
+lv10 skSeed pubSeed q = up pubSeed 9 (lv9 skSeed pubSeed) q
+
+lv11 : (skSeed : Digest) → (pubSeed : Digest) → (q : ℕ) → Digest
+lv11 skSeed pubSeed q = up pubSeed 10 (lv10 skSeed pubSeed) q
+
+lv12 : (skSeed : Digest) → (pubSeed : Digest) → (q : ℕ) → Digest
+lv12 skSeed pubSeed q = up pubSeed 11 (lv11 skSeed pubSeed) q
+
+lv13 : (skSeed : Digest) → (pubSeed : Digest) → (q : ℕ) → Digest
+lv13 skSeed pubSeed q = up pubSeed 12 (lv12 skSeed pubSeed) q
+
+lv14 : (skSeed : Digest) → (pubSeed : Digest) → (q : ℕ) → Digest
+lv14 skSeed pubSeed q = up pubSeed 13 (lv13 skSeed pubSeed) q
+
+lv15 : (skSeed : Digest) → (pubSeed : Digest) → (q : ℕ) → Digest
+lv15 skSeed pubSeed q = up pubSeed 14 (lv14 skSeed pubSeed) q
+
+lv16 : (skSeed : Digest) → (pubSeed : Digest) → (q : ℕ) → Digest
+lv16 skSeed pubSeed q = up pubSeed 15 (lv15 skSeed pubSeed) q
+
+lv17 : (skSeed : Digest) → (pubSeed : Digest) → (q : ℕ) → Digest
+lv17 skSeed pubSeed q = up pubSeed 16 (lv16 skSeed pubSeed) q
+
+lv18 : (skSeed : Digest) → (pubSeed : Digest) → (q : ℕ) → Digest
+lv18 skSeed pubSeed q = up pubSeed 17 (lv17 skSeed pubSeed) q
+
+lv19 : (skSeed : Digest) → (pubSeed : Digest) → (q : ℕ) → Digest
+lv19 skSeed pubSeed q = up pubSeed 18 (lv18 skSeed pubSeed) q
+
+lv20 : (skSeed : Digest) → (pubSeed : Digest) → (q : ℕ) → Digest
+lv20 skSeed pubSeed q = up pubSeed 19 (lv19 skSeed pubSeed) q
+
+-- treeNode skSeed pubSeed k j is node j at height k of the hash tree. Each
+-- arm takes a dummy argument, so eval computes only one arm. Above HMAX =
+-- 20, treeNode gives the fixed digest 0 0 0 0, and verify gives false
+-- (v1Ok).
+treeNode : (skSeed : Digest) → (pubSeed : Digest) → (k : ℕ) → (j : ℕ) → Digest
+treeNode skSeed pubSeed k j = boolElim (λ b → ℕ → Digest) (λ u → lv0 skSeed pubSeed j) (λ u → boolElim (λ b → ℕ → Digest) (λ u → lv1 skSeed pubSeed j) (λ u → boolElim (λ b → ℕ → Digest) (λ u → lv2 skSeed pubSeed j) (λ u → boolElim (λ b → ℕ → Digest) (λ u → lv3 skSeed pubSeed j) (λ u → boolElim (λ b → ℕ → Digest) (λ u → lv4 skSeed pubSeed j) (λ u → boolElim (λ b → ℕ → Digest) (λ u → lv5 skSeed pubSeed j) (λ u → boolElim (λ b → ℕ → Digest) (λ u → lv6 skSeed pubSeed j) (λ u → boolElim (λ b → ℕ → Digest) (λ u → lv7 skSeed pubSeed j) (λ u → boolElim (λ b → ℕ → Digest) (λ u → lv8 skSeed pubSeed j) (λ u → boolElim (λ b → ℕ → Digest) (λ u → lv9 skSeed pubSeed j) (λ u → boolElim (λ b → ℕ → Digest) (λ u → lv10 skSeed pubSeed j) (λ u → boolElim (λ b → ℕ → Digest) (λ u → lv11 skSeed pubSeed j) (λ u → boolElim (λ b → ℕ → Digest) (λ u → lv12 skSeed pubSeed j) (λ u → boolElim (λ b → ℕ → Digest) (λ u → lv13 skSeed pubSeed j) (λ u → boolElim (λ b → ℕ → Digest) (λ u → lv14 skSeed pubSeed j) (λ u → boolElim (λ b → ℕ → Digest) (λ u → lv15 skSeed pubSeed j) (λ u → boolElim (λ b → ℕ → Digest) (λ u → lv16 skSeed pubSeed j) (λ u → boolElim (λ b → ℕ → Digest) (λ u → lv17 skSeed pubSeed j) (λ u → boolElim (λ b → ℕ → Digest) (λ u → lv18 skSeed pubSeed j) (λ u → boolElim (λ b → ℕ → Digest) (λ u → lv19 skSeed pubSeed j) (λ u → boolElim (λ b → ℕ → Digest) (λ u → lv20 skSeed pubSeed j) (λ u → digest 0 0 0 0) (natEq k 20) 0) (natEq k 19) 0) (natEq k 18) 0) (natEq k 17) 0) (natEq k 16) 0) (natEq k 15) 0) (natEq k 14) 0) (natEq k 13) 0) (natEq k 12) 0) (natEq k 11) 0) (natEq k 10) 0) (natEq k 9) 0) (natEq k 8) 0) (natEq k 7) 0) (natEq k 6) 0) (natEq k 5) 0) (natEq k 4) 0) (natEq k 3) 0) (natEq k 2) 0) (natEq k 1) 0) (natEq k 0) 0
+
+-- The root of the 2^h leaves.
+treeHash : (skSeed : Digest) → (pubSeed : Digest) → (h : ℕ) → Digest
+treeHash skSeed pubSeed h = treeNode skSeed pubSeed h 0
+
+-- shiftR i k is i / 2^k.
+shiftR : (i : ℕ) → (k : ℕ) → ℕ
+shiftR i k = fold (λ (n : ℕ) → natDiv n 2) i k
+
+-- The sibling of node q: q + 1 when q is even, else q - 1.
+sibling : (q : ℕ) → ℕ
+sibling q = boolElim (λ b → ℕ) (natAdd q 1) (natSub q 1) (natEq (natMod q 2) 0)
+
+-- The auth path of leaf i: field k is the sibling of the node at height k
+-- above leaf i.
+authPath : (skSeed : Digest) → (pubSeed : Digest) → (h : ℕ) → (i : ℕ) → (f : Fin h) → Digest
+authPath skSeed pubSeed h i f = treeNode skSeed pubSeed (witness f) (sibling (shiftR i (witness f)))
+
+-- One step up from the node v at height k with index q and the auth node
+-- a: when q is even, v is the left input.
+pathNode : (pubSeed : Digest) → (k : ℕ) → (q : ℕ) → (v : Digest) → (a : Digest) → Digest
+pathNode pubSeed k q v a = thNode pubSeed (nodeTweak k (natDiv q 2)) (boolElim (λ b → Digest) v a (natEq (natMod q 2) 0)) (boolElim (λ b → Digest) a v (natEq (natMod q 2) 0))
+
+-- rootFromPath pubSeed h i start auth goes up from the leaf value start of
+-- leaf i (RFC 8391 Algorithm 13). Bit k of i chooses the side at height k.
+-- The fold state is the height and the node.
+rootFromPath : (pubSeed : Digest) → (h : ℕ) → (i : ℕ) → (start : Digest) → (auth : Fin h → Digest) → Digest
+rootFromPath pubSeed h i start auth = payload (fold (λ (st : ℕ × Digest) → chainState (natAdd (witness st) 1) (pathNode pubSeed (witness st) (shiftR i (witness st)) (payload st) (finAt Digest h auth pubSeed (witness st)))) (chainState 0 start) h)
+
+-- The tweak of the randomness of signature i: the step word is i, and the
+-- other words are 0.
+randTweak : (i : ℕ) → Tweak
+randTweak i = pack 0 (pack 0 (pack 0 (pack 0 (pack 0 i))))
+
+-- The public key from the seeds (Q-S4-6 (a)): the root of the tree at the
+-- height of p.
+pkFromSeeds : (skSeed : Digest) → (pubSeed : Digest) → (p : Params) → PubKey
+pkFromSeeds skSeed pubSeed p = pack (treeHash skSeed pubSeed (payload (payload p))) (pack pubSeed p)
+
+-- The signature of m at the leaf i (Q-S4-6 (a)): the randomness r = prf
+-- skPrf (randTweak i), the WOTS+ signature of thMsg r root i m and the auth
+-- path of leaf i.
+signAt : (skSeed : Digest) → (skPrf : Digest) → (pk : PubKey) → (i : ℕ) → (m : Digest) → Sig (height pk)
+signAt skSeed skPrf pk i m = pack i (pack (prf skPrf (randTweak i)) (pack (wotsSign skSeed (witness (payload pk)) i (thMsg (prf skPrf (randTweak i)) (witness pk) i m)) (authPath skSeed (witness (payload pk)) (height pk) i)))
+
+-- v1Ok pk is true when n is 32, log2 w is 4 (Q-S4-8 (a)) and the height is
+-- at most HMAX = 20 (Q-S4-U5-a (a)).
+v1Ok : (pk : PubKey) → Bool
+v1Ok pk = boolElim (λ b → Bool) (boolElim (λ b → Bool) (natEq (logWBits (witness (payload (payload (payload pk))))) 4) false (natEq (witness (payload (payload pk))) 32)) false (natLe (height pk) 20)
+
+-- verify pk m sig is false when v1Ok pk is false. Else it is true when the
+-- root from the leaf of sig and the auth path is the root of pk.
+verify : (pk : PubKey) → (m : Digest) → (sig : Sig (height pk)) → Bool
+verify pk m sig = boolElim (λ b → ℕ → Bool) (λ u → digestEq (rootFromPath (witness (payload pk)) (height pk) (witness sig) (ltree (witness (payload pk)) (witness sig) (wotsPkFromSig (witness (payload pk)) (witness sig) (thMsg (witness (payload sig)) (witness pk) (witness sig) m) (witness (payload (payload sig))))) (payload (payload (payload sig)))) (witness pk)) (λ u → false) (v1Ok pk) 0

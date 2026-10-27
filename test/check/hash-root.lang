@@ -1,0 +1,5 @@
+-- L6 (S4 U6): the kernel never unfolds a hash op (Q-S4-3 (a)). In langc
+-- eval this root is root4 of test/eval/xmss.lang, but in check the tree
+-- nodes stay stuck, so refl does not prove the equation.
+root : Path Digest (witness (pkFromSeeds (digest 9 10 11 12) (digest 1 2 3 4) (v1Params 4))) (digest 16732728611836397650 6703109578639031431 9297810063937139041 6943964917318028946)
+root = refl
