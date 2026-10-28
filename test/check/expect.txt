@@ -36,3 +36,8 @@ glue-pair.lang GLUE_BOUNDARY
 hash-node.lang TYPE_REFL
 hash-root.lang TYPE_REFL
 hash-verify.lang TYPE_REFL
+keystore-position.lang TYPE_REFL
+commit-sealed.lang REFUSE_SEALED
+sign-twice.lang REFUSE_AFFINE_REUSE
+next-twice.lang REFUSE_AFFINE_REUSE
+andthen-tree.lang TYPE_MISMATCH

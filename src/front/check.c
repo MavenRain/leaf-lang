@@ -69,6 +69,7 @@ typedef enum {
   RULE_TRANSPORT,
   RULE_NAT2,
   RULE_BASE,
+  RULE_KEYSTORE,
   RULE_FLAG_IF,
   RULE_BOOL_ELIM,
   RULE_PATHP,
@@ -157,6 +158,14 @@ static const Builtin BUILTINS[] = {
   {"thNode", 4, RULE_BASE, OP_TH_NODE, OP_DIGEST, 0},
   {"thMsg", 4, RULE_BASE, OP_TH_MSG, OP_DIGEST, 0},
   {"prf", 2, RULE_BASE, OP_PRF, OP_DIGEST, 0},
+  /* The keystore (S5). The keystore and leaf values have no source name
+     (Q-S5-13 (a)): only keygen and next make them. */
+  {"keygen", 4, RULE_KEYSTORE, OP_KEYGEN, OP_NAT, 0},
+  {"publicKey", 1, RULE_KEYSTORE, OP_PUBLIC_KEY, OP_NAT, 0},
+  {"next", 1, RULE_KEYSTORE, OP_NEXT, OP_NAT, 0},
+  {"sign", 2, RULE_KEYSTORE, OP_SIGN, OP_NAT, 0},
+  {"leafHeight", 1, RULE_KEYSTORE, OP_LEAF_HEIGHT, OP_NAT, 0},
+  {"andThen", 2, RULE_KEYSTORE, OP_AND_THEN, OP_NAT, 0},
   {"flagIf", 3, RULE_FLAG_IF, OP_FLAG_IF, OP_BOOL, 0},
   {"boolElim", 4, RULE_BOOL_ELIM, OP_BOOL_ELIM, OP_NAT, 0}
 };
@@ -612,11 +621,20 @@ static const Value *case_arrow(Checker *c, const Value *dom, const Value *cod) {
   return val_arrow_mult(c->m, copyable_type(c, dom) ? MULT_OMEGA : MULT_ONE, dom, cod);
 }
 
-static const Core *fn_into(Checker *c, const Term *t, const Value *dom, const Value *want, const Value **result) {
+static const Core *fn_into_mode(Checker *c, const Term *t, const Value *dom, const Value *want, const Value **result, int affine) {
   const Value *ft = NULL;
   const Core *f;
   if (want != NULL) {
     *result = want;
+    if (affine) {
+      Diag saved = *c->m->diag;
+      uint32_t *uses = uses_save(c);
+      f = check(c, t, val_arrow_mult(c->m, MULT_ONE, dom, want));
+      if (f != NULL)
+        return f;
+      *c->m->diag = saved;
+      uses_restore(c, uses);
+    }
     return check(c, t, case_arrow(c, dom, want));
   }
   f = infer(c, t, &ft);
@@ -630,7 +648,12 @@ static const Core *fn_into(Checker *c, const Term *t, const Value *dom, const Va
   if (!converts(c, c->level + 2u, *result,
                    closure_apply(c->m, ft, val_var(c->m, c->level + 1u))))
     return nul(FAIL(c, "TYPE_MISMATCH", "this operation needs a function with a non-dependent result type"));
-  return expect(c, ft, case_arrow(c, dom, *result)) ? f : NULL;
+  return expect(c, ft, affine && ft->mult == MULT_ONE
+      ? val_arrow_mult(c->m, MULT_ONE, dom, *result) : case_arrow(c, dom, *result)) ? f : NULL;
+}
+
+static const Core *fn_into(Checker *c, const Term *t, const Value *dom, const Value *want, const Value **result) {
+  return fn_into_mode(c, t, dom, want, result, 0);
 }
 
 /* The argument type of the function T, from its binder or its type. */
@@ -1192,6 +1215,136 @@ static const Core *rule_base(Call *k) {
   }
   k->type = tyop(c, k->b->result, 0, NULL, NULL, NULL);
   return core_op(c, k->b->op, 0, 0, args, i);
+}
+
+/* The domain definition NAME as a core term, or NAME_UNKNOWN (as
+   equiv_sigma). */
+static const Core *glob(Checker *c, const char *name) {
+  uint32_t d = find_def(c->m, name);
+  if (d == NO_DEF)
+    return nul(FAIL(c, "NAME_UNKNOWN", "the keystore needs the domain definition %s, which is not declared", name));
+  return core_index(c, CORE_GLOBAL, d);
+}
+
+/* keygen skSeed skPrf pubSeed params : Keystore (Q-S5-4 (a)) */
+static const Core *rule_keygen(Call *k) {
+  Checker *c = k->c;
+  const Core *params = glob(c, "Params");
+  const Core *ks = glob(c, "Keystore");
+  const Core *args[4];
+  uint32_t i;
+  if (params == NULL || ks == NULL)
+    return NULL;
+  for (i = 0; i < 4u; i++) {
+    args[i] = check(c, k->args[i], i < 3u ? op0(c, OP_DIGEST) : here(c, params));
+    if (args[i] == NULL)
+      return NULL;
+  }
+  k->type = here(c, ks);
+  return core_op(c, OP_KEYGEN, 0, 0, args, 4u);
+}
+
+/* publicKey ks : PubKey × Keystore */
+static const Core *rule_public_key(Call *k) {
+  Checker *c = k->c;
+  const Core *pk = glob(c, "PubKey");
+  const Core *ks = glob(c, "Keystore");
+  const Core *arg = pk == NULL || ks == NULL ? NULL : check(c, k->args[0], here(c, ks));
+  if (arg == NULL)
+    return NULL;
+  k->type = here(c, core_bind(c, CORE_SIGMA, NULL, pk, ks));
+  return core_op(c, OP_PUBLIC_KEY, 0, 0, &arg, 1u);
+}
+
+/* next ks : Durable (Option (Leaf × Keystore)). The core term holds the
+   Option type first (Q-S5-17 (a)). */
+static const Core *rule_next(Call *k) {
+  Checker *c = k->c;
+  const Core *ks = glob(c, "Keystore");
+  const Core *args[2];
+  uint32_t fam;
+  if (ks == NULL)
+    return NULL;
+  for (fam = 0; fam < c->m->family_count && strcmp(c->m->families[fam].name, "Durable") != 0; fam++)
+    ;
+  if (fam == c->m->family_count)
+    return nul(FAIL(c, "NAME_UNKNOWN", "next needs the domain family Durable, which is not declared"));
+  args[0] = op3(c, OP_OPTION, 0, 1u, core_bind(c, CORE_SIGMA, NULL, op3(c, OP_LEAF, 0, 0, NULL, NULL, NULL), ks), NULL, NULL);
+  args[1] = args[0] == NULL ? NULL : check(c, k->args[0], here(c, ks));
+  if (args[1] == NULL)
+    return NULL;
+  k->type = here(c, core_op(c, OP_FAMILY, fam, 0, args, 1u));
+  return core_op(c, OP_NEXT, 0, 0, args, 2u);
+}
+
+/* andThen d k : Durable B, with d : Durable A and k : A ⊸ Durable B
+   (Q-S5-6 (a)). The core term holds B first: the commit step builds a
+   commit node at B. */
+static const Core *rule_and_then(Call *k) {
+  Checker *c = k->c;
+  const Value *dt = NULL;
+  const Value *res = NULL;
+  const Core *args[3];
+  uint32_t fam;
+  for (fam = 0; fam < c->m->family_count && strcmp(c->m->families[fam].name, "Durable") != 0; fam++)
+    ;
+  if (fam == c->m->family_count)
+    return nul(FAIL(c, "NAME_UNKNOWN", "andThen needs the domain family Durable, which is not declared"));
+  args[1] = infer(c, k->args[0], &dt);
+  if (args[1] == NULL)
+    return NULL;
+  if (!val_is(dt, OP_FAMILY) || dt->inst != fam || dt->argc != 1u)
+    return nul(FAIL(c, "TYPE_MISMATCH", "andThen needs a tree of type Durable A, found a term of type %s", show(c, dt)));
+  args[2] = fn_into_mode(c, k->args[1], dt->args[0], k->hint, &res, 1);
+  if (args[2] == NULL)
+    return NULL;
+  if (!val_is(res, OP_FAMILY) || res->inst != fam || res->argc != 1u)
+    return nul(FAIL(c, "TYPE_MISMATCH", "andThen needs a function into Durable B, found one into %s", show(c, res)));
+  args[0] = quote_value(c->m, c->level, res->args[0]);
+  if (args[0] == NULL)
+    return nul(FAIL(c, "OOM", "out of memory"));
+  k->type = res;
+  return core_op(c, OP_AND_THEN, 0, 0, args, 3u);
+}
+
+/* sign l m : Sig (leafHeight l) (Q-S5-5 (b)). The leaf is used one time;
+   the result type holds its core term, which is no use. */
+static const Core *rule_sign(Call *k) {
+  Checker *c = k->c;
+  const Core *sig = glob(c, "Sig");
+  const Core *args[2];
+  args[0] = sig == NULL ? NULL : check(c, k->args[0], op0(c, OP_LEAF));
+  args[1] = args[0] == NULL ? NULL : check(c, k->args[1], op0(c, OP_DIGEST));
+  if (args[1] == NULL)
+    return NULL;
+  k->type = here(c, core_app(c, sig, op3(c, OP_LEAF_HEIGHT, 0, 1u, args[0], NULL, NULL)));
+  return core_op(c, OP_SIGN, 0, 0, args, 2u);
+}
+
+/* leafHeight l : ℕ, with l at multiplicity 0. */
+static const Core *rule_leaf_height(Call *k) {
+  Checker *c = k->c;
+  const Core *arg = check_at(c, MULT_ZERO, k->args[0], op0(c, OP_LEAF));
+  if (arg == NULL)
+    return NULL;
+  k->type = nat_type(c);
+  return core_op(c, OP_LEAF_HEIGHT, 0, 0, &arg, 1u);
+}
+
+/* The keystore core names (S5): keygen, publicKey, next, sign,
+   leafHeight and andThen. */
+static const Core *rule_keystore(Call *k) {
+  if (k->b->op == OP_KEYGEN)
+    return rule_keygen(k);
+  if (k->b->op == OP_PUBLIC_KEY)
+    return rule_public_key(k);
+  if (k->b->op == OP_NEXT)
+    return rule_next(k);
+  if (k->b->op == OP_AND_THEN)
+    return rule_and_then(k);
+  if (k->b->op == OP_SIGN)
+    return rule_sign(k);
+  return rule_leaf_height(k);
 }
 
 /* flagIf b yes no */
@@ -1757,6 +1910,8 @@ static const Core *rule(Call *k) {
     return rule_nat2(k);
   case RULE_BASE:
     return rule_base(k);
+  case RULE_KEYSTORE:
+    return rule_keystore(k);
   case RULE_FLAG_IF:
     return rule_flag_if(k);
   case RULE_BOOL_ELIM:
@@ -1803,6 +1958,9 @@ static const Core *ctor_app(Call *k, uint32_t ctor) {
   const Value **vals = arena_alloc(c->m->arena, ((size_t)p + 1u) * sizeof *vals);
   const Env *env;
   uint32_t j;
+  /* Only the core next makes a Durable commit node (Q-S5-7 (a)). */
+  if (c->decls->items[c->decl_index].origin == ORIGIN_PROGRAM && strcmp(f->name, "Durable") == 0 && strcmp(ci->name, "commit") == 0)
+    return nul(FAIL(c, "REFUSE_SEALED", "commit builds a Durable commit node; a program cannot write a keystore position, only the core next makes a commit node (Q-S5-7 (a))"));
   if (cores == NULL || vals == NULL)
     return nul(FAIL(c, "OOM", "out of memory"));
   if (!check_params(c, f, k->args, cores, vals))
@@ -2260,7 +2418,7 @@ static Resource resource_shape(Checker *c, const Value *v, uint32_t level) {
     return resource_join(resource_shape(c, v->dom, level), resource_shape(c, closure_apply(c->m, v, val_var(c->m, level)), level + 1u));
   if (v->kind != VAL_OP)
     return RESOURCE_UNKNOWN;
-  if (v->op == OP_LEAF)
+  if (v->op == OP_LEAF || v->op == OP_KEYSTORE_VAL || v->op == OP_LEAF_VAL)
     return RESOURCE_PRESENT;
   if (v->op == OP_NAT || v->op == OP_BOOL || v->op == OP_UNIT || v->op == OP_I || v->op == OP_SSET || v->op == OP_DIGEST || v->op == OP_LOGW)
     return RESOURCE_NONE;

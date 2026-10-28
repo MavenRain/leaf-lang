@@ -1,0 +1,19 @@
+-- A lazy trap in a Tweak field (S5 U7, the D14a flag row). A field is a
+-- natMul that can wrap. The Wasm writer must trap on the trap flag of the
+-- field, as eval does, also when the low word passes the width check. In
+-- kindFlag the kind field for n = 4294967296 wraps to 0, under 2^32. In
+-- treeFlag the tree field has no width check.
+kindTw : (n : ℕ) → Tweak
+kindTw n = pack 0 (pack 0 (pack (natMul n 4294967296) (pack 0 (pack 0 1))))
+
+treeTw : (n : ℕ) → Tweak
+treeTw n = pack 0 (pack (natMul n 18446744073709551615) (pack 0 (pack 0 (pack 0 1))))
+
+word : (n : ℕ) → Digest
+word n = digest 7 n 8 9
+
+kindFlag : (n : ℕ) → Bool
+kindFlag n = digestEq (prf (word 1) (kindTw n)) (word 5)
+
+treeFlag : (n : ℕ) → Bool
+treeFlag n = digestEq (prf (word 1) (treeTw n)) (word 5)

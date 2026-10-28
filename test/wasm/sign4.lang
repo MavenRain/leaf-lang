@@ -1,0 +1,53 @@
+-- The signer sign and verify check (S5 U7, D37, Q-S5-37 (a)). The seeds
+-- are the seeds of the test/gate.sh signer rows. sigSum folds the 64
+-- digits of each digest of a signature in the order rand, the 67 WOTS+
+-- values, the h auth nodes: acc := (7 acc + digit i) mod (2^61 - 1), from
+-- acc 0 (the D30 fold, continued). test/gate.sh compares sumP with the
+-- harness line `sign LEAF M` after `keygen 1` at the start position P and
+-- `next` on the signer module of height 4, and okP and bad with the
+-- harness line `verify M`.
+skSeed : Digest
+skSeed = digest 283686952306183 579005069656919567 1157726452361532951 1736447835066146335
+
+skPrf : Digest
+skPrf = digest 2315169217770759719 2893890600475373103 3472611983179986487 4051333365884599871
+
+pubSeed : Digest
+pubSeed = digest 4630054748589213255 5208776131293826639 5787497513998440023 6366218896703053407
+
+-- M is 32 bytes 6d. M2 is the byte 6e, then 31 bytes 6d.
+msg : Digest
+msg = digest 7885078839350357357 7885078839350357357 7885078839350357357 7885078839350357357
+
+msg2 : Digest
+msg2 = digest 7957136433388285293 7885078839350357357 7885078839350357357 7885078839350357357
+
+pk : PubKey
+pk = pkFromSeeds skSeed pubSeed (v1Params 4)
+
+sumFrom : (acc : ℕ) → (r : Digest) → ℕ
+sumFrom acc r = payload (fold (λ (st : ℕ × ℕ) → natPair (natAdd (witness st) 1) (natMod (natAdd (natMul 7 (payload st)) (digit logW4 r (witness st))) 2305843009213693951)) (natPair 0 acc) 64)
+
+sigSum : (h : ℕ) → (sig : Sig h) → ℕ
+sigSum h sig = payload (fold (λ (st : ℕ × ℕ) → natPair (natAdd (witness st) 1) (sumFrom (payload st) (finAt Digest h (payload (payload (payload sig))) (digest 0 0 0 0) (witness st)))) (natPair 0 (payload (fold (λ (st : ℕ × ℕ) → natPair (natAdd (witness st) 1) (sumFrom (payload st) (finAt Digest 67 (witness (payload (payload sig))) (digest 0 0 0 0) (witness st)))) (natPair 0 (sumFrom 0 (witness (payload sig)))) 67))) h)
+
+sum0 : ℕ
+sum0 = sigSum (height pk) (signAt skSeed skPrf pk 0 msg)
+
+sum7 : ℕ
+sum7 = sigSum (height pk) (signAt skSeed skPrf pk 7 msg)
+
+sum15 : ℕ
+sum15 = sigSum (height pk) (signAt skSeed skPrf pk 15 msg)
+
+ok0 : Bool
+ok0 = verify pk msg (signAt skSeed skPrf pk 0 msg)
+
+ok7 : Bool
+ok7 = verify pk msg (signAt skSeed skPrf pk 7 msg)
+
+ok15 : Bool
+ok15 = verify pk msg (signAt skSeed skPrf pk 15 msg)
+
+bad : Bool
+bad = verify pk msg2 (signAt skSeed skPrf pk 7 msg)

@@ -507,6 +507,14 @@ int main(int argc, char **argv) {
   ok &= domain("r : Path LogW (hcomp (λ j → []) logW8) logW8\nr = refl", NULL);
   ok &= domain("r : Path Digest (hcomp (λ j → []) (digest 1 2 3 4)) (digest 1 2 3 4)\nr = refl", NULL);
   ok &= domain("r : (i : I) → Path Digest (hcomp (λ j → [ i ↦ digest 1 2 3 4 ]) (digest 1 2 3 4)) (digest 1 2 3 4)\nr i = refl", NULL);
+  /* S5 U2: leafHeight takes its leaf at 0, sign takes it at 1. */
+  ok &= domain("data Durable (A : Type 0) : Type where\n  done : (doneOf : A) → Durable A\n  commit : (at : ℕ) → (cont : Durable A) → Durable A\n\n"
+               "continuation : ℕ ⊸ Durable ℕ\ncontinuation n = done ℕ n\n\nresult : Durable ℕ\nresult = andThen (done ℕ 3) continuation", NULL);
+  ok &= domain("data Durable (A : Type 0) : Type where\n  done : (doneOf : A) → Durable A\n  commit : (at : ℕ) → (cont : Durable A) → Durable A\n\n"
+               "continuation : ℕ ⊸ Durable ℕ\ncontinuation n = done ℕ n\n\nresult : ℕ\nresult = fold (λ n → n) (λ n r → r) (andThen (done ℕ 3) continuation)", NULL);
+  ok &= domain("h : (@0 l : Leaf) → ℕ\nh l = leafHeight l", NULL);
+  ok &= domain("Sig : ℕ → Type 0\nSig h = ℕ\n\nsg : Leaf ⊸ Digest → (h : ℕ) × Sig h\nsg l m = pack (leafHeight l) (sign l m)", NULL);
+  ok &= domain("Sig : ℕ → Type 0\nSig h = ℕ\n\ntwo : Leaf ⊸ Digest → ((h : ℕ) × Sig h) × ((h : ℕ) × Sig h)\ntwo l m = pack (pack (leafHeight l) (sign l m)) (pack (leafHeight l) (sign l m))", "REFUSE_AFFINE_REUSE");
   /* S4 U3a: Keccak-256 of the empty input. */
   ok &= keccak_empty();
   /* S4 U3b, L6: in check a hash op stays stuck, also on digest values.

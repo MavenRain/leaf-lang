@@ -1,0 +1,6 @@
+-- L5 (Q-S5-10 (a)): two sign of one leaf use the leaf two times.
+opened : Durable (Option (Leaf × Keystore)) ⊸ Option (Leaf × Keystore)
+opened d = fold (λ o → o) (λ n r → r) d
+
+twice : Keystore ⊸ ℕ
+twice ks = option 0 (λ p → unpack p (λ l kr → natAdd (witness (sign l (digest 1 2 3 4))) (witness (sign l (digest 5 6 7 8))))) (opened (next ks))

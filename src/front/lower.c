@@ -439,6 +439,14 @@ static const char *op_word(IrOp op) {
     return "mul_carry";
   case IR_OP_OR:
     return "or";
+  case IR_OP_DIV:
+    return "div";
+  case IR_OP_MOD:
+    return "mod";
+  case IR_OP_SHR:
+    return "shr";
+  case IR_OP_AND:
+    return "and";
   }
   return "?";
 }
@@ -481,6 +489,30 @@ static void close_print(FILE *out, unsigned depth) {
   fputs("}\n", out);
 }
 
+static const char *hash_name(IrHash h) {
+  switch (h) {
+  case IR_HASH_TH_CHAIN:
+    return "thChain";
+  case IR_HASH_TH_NODE:
+    return "thNode";
+  case IR_HASH_TH_MSG:
+    return "thMsg";
+  case IR_HASH_PRF:
+    return "prf";
+  }
+  return "?";
+}
+
+/* The fields of S, then "]". */
+static void fields_print(const IrStmt *s, FILE *out) {
+  size_t i;
+  for (i = 0; i < s->field_count; i++) {
+    fputs(i == 0 ? "" : ", ", out);
+    expr_print(s->fields[i], out, 0);
+  }
+  fputs("]\n", out);
+}
+
 static void stmt_print(const IrStmt *s, FILE *out, unsigned depth) {
   size_t i;
   indent(out, depth);
@@ -492,11 +524,11 @@ static void stmt_print(const IrStmt *s, FILE *out, unsigned depth) {
     return;
   case IR_STMT_ALLOC:
     fprintf(out, "l%u := alloc [", (unsigned)s->local);
-    for (i = 0; i < s->field_count; i++) {
-      fputs(i == 0 ? "" : ", ", out);
-      expr_print(s->fields[i], out, 0);
-    }
-    fputs("]\n", out);
+    fields_print(s, out);
+    return;
+  case IR_STMT_HASH:
+    fprintf(out, "l%u, l%u := hash %s [", (unsigned)s->local, (unsigned)s->flag_local, hash_name(s->hash));
+    fields_print(s, out);
     return;
   case IR_STMT_IF:
     fputs("if ", out);
@@ -629,6 +661,136 @@ static int lower_ctor(Low *l, Buf *b, const Value *v, Operand *out) {
   return ctor_full(l, b, v, fam->param_count, c->field_count, v->inst - fam->first_ctor, out);
 }
 
+/* A new statement KIND (ALLOC or HASH) over the words of the N values of
+   ARGS, with no tag and no flag words. The flag is the or of their flags. */
+static int word_node(Low *l, Buf *b, IrStmtKind kind, IrHash h, const Value *const *args, uint32_t n, Operand *out) {
+  const IrExpr **fields = arena_alloc(l->m->arena, ((size_t)n + 1u) * sizeof *fields);
+  const IrExpr *f = ex_const(l, 0);
+  IrStmt *s;
+  Operand a;
+  uint32_t i;
+  if (fields == NULL)
+    return oom(l);
+  for (i = 0; i < n; i++) {
+    if (!lower(l, b, args[i], &a))
+      return 0;
+    fields[i] = a.w;
+    f = ex_or(l, f, a.f);
+  }
+  s = stmt_new(l, kind);
+  if (s == NULL || f == NULL)
+    return 0;
+  s->local = local_new(l);
+  s->hash = h;
+  if (kind == IR_STMT_HASH) {
+    s->flag_local = local_new(l);
+    f = ex_or(l, f, ex_local(l, s->flag_local));
+  }
+  s->fields = fields;
+  s->field_count = n;
+  return emit(l, b, s) && atoms(l, b, ex_local(l, s->local), f, out);
+}
+
+/* digest w0 w1 w2 w3: a block of the four words (D1). */
+static int digest_block(Low *l, Buf *b, const Value *v, Operand *out) {
+  return v->argc < 4u ? closure(l) : word_node(l, b, IR_STMT_ALLOC, IR_HASH_TH_CHAIN, v->args, 4u, out);
+}
+
+/* digestEq x y: the product of the four 0 or 1 word tests (D2). */
+static int digest_eq(Low *l, Buf *b, const Value *v, Operand *out) {
+  Operand x;
+  Operand y;
+  const IrExpr *e;
+  uint32_t i;
+  if (!lower(l, b, v->args[0], &x) || !lower(l, b, v->args[1], &y))
+    return 0;
+  x.w = atom(l, b, x.w);
+  y.w = atom(l, b, y.w);
+  e = ex_bin(l, IR_OP_EQ, ex_load(l, x.w, 0), ex_load(l, y.w, 0));
+  for (i = 1; i < 4u; i++)
+    e = ex_bin(l, IR_OP_MUL, e, ex_bin(l, IR_OP_EQ, ex_load(l, x.w, i), ex_load(l, y.w, i)));
+  return atoms(l, b, e, ex_or(l, x.f, y.f), out);
+}
+
+/* thChain, thNode, thMsg and prf: one hash node over the args (D3, D4). */
+static int hash_node(Low *l, Buf *b, const Value *v, IrHash h, Operand *out) {
+  return word_node(l, b, IR_STMT_HASH, h, v->args, v->argc, out);
+}
+
+/* A keystore op that stays stuck (a neutral seed or height), or a keystore
+   or leaf value, in a lowered entry (Q-S5-23, Q-S5-25). */
+static int runtime_keystore(Low *l) {
+  return diag_fail(l->m->diag, "REFUSE_RUNTIME_KEYSTORE", l->m->def,
+                   "a keystore operation needs closed seeds and a closed height in a lowered entry (runtime keys: S5 U6)");
+}
+
+/* natDiv x y and natMod x y (D8). A divisor that is not a nonzero constant
+   is y + (y == 0), so the Wasm op never sees 0, and y = 0 sets the flag
+   (Q-S4-5). */
+static int nat_div(Low *l, Buf *b, const Value *v, IrOp op, Operand *out) {
+  Operand x;
+  Operand y;
+  const IrExpr *zero;
+  if (!lower(l, b, v->args[0], &x) || !lower(l, b, v->args[1], &y))
+    return 0;
+  if (y.w != NULL && y.w->kind == IR_EXPR_CONST && y.w->value != 0)
+    return atoms(l, b, ex_bin(l, op, x.w, y.w), ex_or(l, x.f, y.f), out);
+  y.w = atom(l, b, y.w);
+  zero = atom(l, b, ex_bin(l, IR_OP_EQ, y.w, ex_const(l, 0)));
+  return atoms(l, b, ex_bin(l, op, x.w, ex_bin(l, IR_OP_ADD, y.w, zero)), ex_or(l, ex_or(l, x.f, y.f), zero), out);
+}
+
+/* The bits of a closed LogW: 1, 2, 4 or 8. 0 for another value. */
+static uint64_t digit_bits(const Value *v) {
+  if (val_is(v, OP_LOGW1))
+    return 1u;
+  if (val_is(v, OP_LOGW2))
+    return 2u;
+  if (val_is(v, OP_LOGW4))
+    return 4u;
+  return val_is(v, OP_LOGW8) ? 8u : 0u;
+}
+
+/* digit logW d pos (D9): the digit at POS of the big-endian words of the
+   block D, as the evaluator gives it. A position past 256 / bits traps, and
+   no load reads past word 3. A neutral logW has no IR form (a LogW is never
+   an entry param). */
+static int digit_word(Low *l, Buf *b, const Value *v, Operand *out) {
+  Operand d;
+  Operand p;
+  const IrExpr *at;
+  const IrExpr *k;
+  const IrExpr *w;
+  const IrExpr *mask;
+  const IrExpr *f;
+  uint64_t bits = digit_bits(v->args[0]);
+  uint32_t j;
+  if (bits == 0)
+    return internal(l, "an operation with no IR form (O8)");
+  if (!lower(l, b, v->args[1], &d) || !lower(l, b, v->args[2], &p))
+    return 0;
+  mask = ex_const(l, ((uint64_t)1 << bits) - 1u);
+  d.w = atom(l, b, d.w);
+  if (p.w != NULL && p.w->kind == IR_EXPR_CONST) {
+    if (p.w->value >= 256u / bits) {
+      *out = trap_value(l);
+      return out->w != NULL && out->f != NULL;
+    }
+    at = ex_load(l, d.w, (uint32_t)(p.w->value * bits / 64u));
+    w = ex_bin(l, IR_OP_SHR, at, ex_const(l, 64u - bits - p.w->value * bits % 64u));
+    return atoms(l, b, ex_bin(l, IR_OP_AND, w, mask), ex_or(l, d.f, p.f), out);
+  }
+  p.w = atom(l, b, p.w);
+  at = atom(l, b, ex_bin(l, IR_OP_MUL, p.w, ex_const(l, bits)));
+  k = atom(l, b, ex_bin(l, IR_OP_SHR, at, ex_const(l, 6)));
+  w = ex_bin(l, IR_OP_MUL, ex_bin(l, IR_OP_EQ, k, ex_const(l, 0)), ex_load(l, d.w, 0));
+  for (j = 1; j < 4u; j++)
+    w = ex_bin(l, IR_OP_ADD, w, ex_bin(l, IR_OP_MUL, ex_bin(l, IR_OP_EQ, k, ex_const(l, j)), ex_load(l, d.w, j)));
+  w = ex_bin(l, IR_OP_SHR, w, ex_bin(l, IR_OP_SUB, ex_const(l, 64u - bits), ex_bin(l, IR_OP_AND, at, ex_const(l, 63))));
+  f = ex_or(l, ex_or(l, d.f, p.f), ex_bin(l, IR_OP_LE, ex_const(l, 256u / bits), p.w));
+  return atoms(l, b, ex_bin(l, IR_OP_AND, w, mask), f, out);
+}
+
 /* A canonical value. An eliminator here has too few arguments, so it is a
    function. */
 static int lower_canon(Low *l, Buf *b, const Value *v, Operand *out) {
@@ -677,6 +839,8 @@ static int lower_canon(Low *l, Buf *b, const Value *v, Operand *out) {
     return ctor_full(l, b, v, 0, 0, 0, out);
   case OP_CTOR:
     return lower_ctor(l, b, v, out);
+  case OP_DIGEST_VAL:
+    return digest_block(l, b, v, out);
   case OP_OPTION_ELIM:
   case OP_PURE:
   case OP_MAP:
@@ -693,17 +857,25 @@ static int lower_canon(Low *l, Buf *b, const Value *v, Operand *out) {
   case OP_NAT_DIV:
   case OP_NAT_MOD:
   case OP_LOGW_BITS:
-  case OP_DIGEST_VAL:
   case OP_DIGEST_EQ:
   case OP_DIGIT:
   case OP_TH_CHAIN:
   case OP_TH_NODE:
   case OP_TH_MSG:
   case OP_PRF:
+  case OP_KEYGEN:
+  case OP_PUBLIC_KEY:
+  case OP_NEXT:
+  case OP_AND_THEN:
+  case OP_SIGN:
+  case OP_LEAF_HEIGHT:
   case OP_FLAG_IF:
   case OP_BOOL_ELIM:
   case OP_PROJ:
     return closure(l);
+  case OP_KEYSTORE_VAL:
+  case OP_LEAF_VAL:
+    return runtime_keystore(l);
   case OP_LOGW1:
   case OP_LOGW2:
   case OP_LOGW4:
@@ -1073,21 +1245,39 @@ static int lower_stuck(Low *l, Buf *b, const Value *v, Operand *out) {
   case OP_NAT_LE:
     return nat_bin(l, b, v, IR_OP_LE, 0, out);
   case OP_NAT_DIV:
+    return nat_div(l, b, v, IR_OP_DIV, out);
   case OP_NAT_MOD:
+    return nat_div(l, b, v, IR_OP_MOD, out);
+  case OP_DIGIT:
+    return digit_word(l, b, v, out);
+  case OP_KEYGEN:
+  case OP_PUBLIC_KEY:
+  case OP_NEXT:
+  case OP_AND_THEN:
+  case OP_SIGN:
+  case OP_LEAF_HEIGHT:
+    return runtime_keystore(l);
   case OP_LOGW1:
   case OP_LOGW2:
   case OP_LOGW4:
   case OP_LOGW8:
   case OP_LOGW_BITS:
-  case OP_DIGEST_VAL:
-  case OP_DIGEST_EQ:
-  case OP_DIGIT:
-  case OP_TH_CHAIN:
-  case OP_TH_NODE:
-  case OP_TH_MSG:
-  case OP_PRF:
+  case OP_KEYSTORE_VAL:
+  case OP_LEAF_VAL:
   case OP_BOOL_ELIM:
     return internal(l, "an operation with no IR form (O8)");
+  case OP_DIGEST_VAL:
+    return digest_block(l, b, v, out);
+  case OP_DIGEST_EQ:
+    return digest_eq(l, b, v, out);
+  case OP_TH_CHAIN:
+    return hash_node(l, b, v, IR_HASH_TH_CHAIN, out);
+  case OP_TH_NODE:
+    return hash_node(l, b, v, IR_HASH_TH_NODE, out);
+  case OP_TH_MSG:
+    return hash_node(l, b, v, IR_HASH_TH_MSG, out);
+  case OP_PRF:
+    return hash_node(l, b, v, IR_HASH_PRF, out);
   case OP_FLAG_IF:
     return flag_if(l, b, v, out);
   }

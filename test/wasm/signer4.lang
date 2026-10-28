@@ -1,0 +1,16 @@
+-- The signer root check (S5 U6b, D30, Q-S5-34 (a)). The seeds are the
+-- seeds of the test/gate.sh signer rows. rootSum folds the 64 digits of the
+-- root of the h = 4 tree: acc := (7 acc + digit i) mod (2^61 - 1), from acc
+-- 0. test/gate.sh compares it with the harness line `rootSum` after
+-- `keygen 1` on the signer module of height 4.
+skSeed : Digest
+skSeed = digest 283686952306183 579005069656919567 1157726452361532951 1736447835066146335
+
+pubSeed : Digest
+pubSeed = digest 4630054748589213255 5208776131293826639 5787497513998440023 6366218896703053407
+
+sumOf : (r : Digest) → ℕ
+sumOf r = payload (fold (λ (st : ℕ × ℕ) → natPair (natAdd (witness st) 1) (natMod (natAdd (natMul 7 (payload st)) (digit logW4 r (witness st))) 2305843009213693951)) (natPair 0 0) 64)
+
+rootSum : ℕ
+rootSum = sumOf (treeHash skSeed pubSeed 4)

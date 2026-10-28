@@ -1,0 +1,30 @@
+func divBy (nat) -> nat, 3 locals
+  l1 := eq(l0, 0)
+  l2 := div(100, add(l0, l1))
+  if l1 {
+    trap
+  } else {
+  }
+  return l2
+func modSeven (nat) -> nat, 2 locals
+  l1 := mod(l0, 7)
+  return l1
+func digitAt (nat) -> nat, 3 locals
+  l1 := alloc [l0, 1, 2, 3]
+  l2 := and(shr(load(l1, 0), 40), 15)
+  return l2
+func digitOf (nat) -> nat, 6 locals
+  l1 := alloc [81985529216486895, 2, 3, 4]
+  l2 := mul(l0, 4)
+  l3 := shr(l2, 6)
+  l4 := and(shr(add(add(add(mul(eq(l3, 0), load(l1, 0)), mul(eq(l3, 1), load(l1, 1))), mul(eq(l3, 2), load(l1, 2))), mul(eq(l3, 3), load(l1, 3))), sub(60, and(l2, 63))), 15)
+  l5 := le(64, l0)
+  if l5 {
+    trap
+  } else {
+  }
+  return l4
+func digitPast (nat) -> nat, 2 locals
+  l1 := alloc [l0, 0, 0, 0]
+  trap
+  return 0

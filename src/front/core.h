@@ -60,6 +60,14 @@ typedef enum {
   OP_TH_NODE,
   OP_TH_MSG,
   OP_PRF,
+  OP_KEYGEN, /* the keystore ops (S5): keygen, publicKey, next, sign, leafHeight */
+  OP_PUBLIC_KEY,
+  OP_NEXT, /* args: the type Option (Leaf × Keystore), the keystore (Q-S5-17) */
+  OP_SIGN,
+  OP_LEAF_HEIGHT,
+  OP_AND_THEN, /* args: the type B, the tree, the continuation (Q-S5-6 (a)) */
+  OP_KEYSTORE_VAL, /* the keystore value: [skSeed, skPrf, pk, i] in args (Q-S5-13) */
+  OP_LEAF_VAL, /* the leaf value: [skSeed, skPrf, pk, i] in args (Q-S5-13) */
   OP_FLAG_IF,
   OP_BOOL_ELIM,
   OP_PROJ,

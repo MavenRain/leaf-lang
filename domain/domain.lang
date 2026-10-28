@@ -324,7 +324,14 @@ signAt skSeed skPrf pk i m = pack i (pack (prf skPrf (randTweak i)) (pack (wotsS
 v1Ok : (pk : PubKey) → Bool
 v1Ok pk = boolElim (λ b → Bool) (boolElim (λ b → Bool) (natEq (logWBits (witness (payload (payload (payload pk))))) 4) false (natEq (witness (payload (payload pk))) 32)) false (natLe (height pk) 20)
 
--- verify pk m sig is false when v1Ok pk is false. Else it is true when the
--- root from the leaf of sig and the auth path is the root of pk.
+-- verifyAt h pk m sig is the S4 verify algorithm at the height h (Q-S5-12
+-- (a)). It is false when v1Ok pk is false or when h is not height pk. Else
+-- it is true when the root from the leaf of sig and the auth path is the
+-- root of pk.
+verifyAt : (h : ℕ) → (pk : PubKey) → (m : Digest) → (sig : Sig h) → Bool
+verifyAt h pk m sig = boolElim (λ b → ℕ → Bool) (λ u → boolElim (λ b → ℕ → Bool) (λ v → digestEq (rootFromPath (witness (payload pk)) h (witness sig) (ltree (witness (payload pk)) (witness sig) (wotsPkFromSig (witness (payload pk)) (witness sig) (thMsg (witness (payload sig)) (witness pk) (witness sig) m) (witness (payload (payload sig))))) (payload (payload (payload sig)))) (witness pk)) (λ v → false) (natEq h (height pk)) 0) (λ u → false) (v1Ok pk) 0
+
+-- verify pk m sig is verifyAt at the height of pk (Q-S5-12 (a)): the same
+-- results as the S4 verify.
 verify : (pk : PubKey) → (m : Digest) → (sig : Sig (height pk)) → Bool
-verify pk m sig = boolElim (λ b → ℕ → Bool) (λ u → digestEq (rootFromPath (witness (payload pk)) (height pk) (witness sig) (ltree (witness (payload pk)) (witness sig) (wotsPkFromSig (witness (payload pk)) (witness sig) (thMsg (witness (payload sig)) (witness pk) (witness sig) m) (witness (payload (payload sig))))) (payload (payload (payload sig)))) (witness pk)) (λ u → false) (v1Ok pk) 0
+verify pk m sig = verifyAt (height pk) pk m sig

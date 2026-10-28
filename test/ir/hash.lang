@@ -1,0 +1,21 @@
+-- The Digest block and the hash node (S5 U4). `langc ir` prints a block of
+-- four words for each digest and one hash statement for each hash
+-- operation, with its args in source order. The Wasm writer gives the
+-- hash node a call to keccak256 (S5 U5).
+tw : (n : ℕ) → Tweak
+tw n = pack 0 (pack 0 (pack 0 (pack 0 (pack 0 n))))
+
+word : (n : ℕ) → Digest
+word n = digest 7 n 8 9
+
+chainEq : (n : ℕ) → Bool
+chainEq n = digestEq (thChain (word n) (tw 1) (word 2)) (word n)
+
+nodeEq : (n : ℕ) → Bool
+nodeEq n = digestEq (thNode (word 1) (tw n) (word 2) (word 3)) (word 4)
+
+msgEq : (n : ℕ) → Bool
+msgEq n = digestEq (thMsg (word 1) (word 2) n (word 3)) (word 4)
+
+prfEq : (n : ℕ) → Bool
+prfEq n = digestEq (prf (word n) (tw 2)) (word 5)

@@ -1,0 +1,3 @@
+-- andThen needs a Durable tree as its first argument (Q-S5-6 (a)).
+notTree : Durable ℕ
+notTree = andThen 3 (λ n → done ℕ n)

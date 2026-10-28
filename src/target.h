@@ -22,4 +22,11 @@ int target_abi_line(const IrFunc *fn, FILE *out, FILE *err);
 /* Writes PART of the target for PROG. Returns 1, or 0 after a message on ERR. */
 int target_write(const IrProgram *prog, TargetPart part, FILE *out, FILE *err);
 
+/* The largest height of `langc signer --height H` (D23). */
+#define TARGET_SIGNER_HEIGHT_MAX 20u
+
+/* Writes the Wasm signer module for HEIGHT (D18 to D21). Only the Wasm kit
+   has it. Returns 1, or 0 after a message on ERR. */
+int target_write_signer(unsigned height, FILE *out, FILE *err);
+
 #endif

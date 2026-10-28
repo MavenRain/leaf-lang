@@ -357,3 +357,114 @@ rows kill M5 and M7b.
 - The hash ops do not lower. S5 puts Keccak in the Wasm module.
 - `check --json` gives "laws" as "0 of 0" (main.c). L1 and L6 do not
   change it.
+
+## S5: keystore and Wasm signer
+
+S5 (2026-10-27 to 2026-10-28) adds the keystore operations and the Wasm
+signer (PLAN section 5.2, section 9 S5 row).
+
+- The keystore and leaf values are two internal core value ops with no
+  source name. `langc eval` prints them as `keystore h i` and `leaf h i`,
+  with no seed and no public key (Q-S5-13 to Q-S5-15).
+- The checker gives the type `Option (Leaf × Keystore)` to the `next`
+  core node (Q-S5-16, Q-S5-17). `verifyAt` takes its `Sig` at omega
+  (Q-S5-18).
+- L1 (the keystore form), L3, L4 and L5 are eval rows at h = 4 (test/eval
+  durable and keystore) and refusal fixtures (test/check andthen-tree,
+  commit-sealed, keystore-position, next-twice and sign-twice) (Q-S5-10).
+- Lowering: a keystore op with closed arguments lowers by eval. Each hash
+  op stays stuck and lowers as a hash node. The IR adds the hash node and
+  a digit op (Q-S5-21 (b), Q-S5-22 (a)). A stuck keystore op and a
+  keystore or leaf value give `REFUSE_RUNTIME_KEYSTORE` (Q-S5-23 to
+  Q-S5-25). The row `ir_digest NAME` compares the sha-256 of `langc ir`
+  with test/ir/NAME.sha256 (Q-S5-24 (a)).
+- Wasm Keccak: one internal function `keccak_f` with 24 unrolled rounds
+  over i64 locals. `keccak256` swaps the bytes of the big-endian IR words
+  (Q-S5-26 (a), Q-S5-27 (a)). test/ir/hashkat.lang has known-answer rows
+  for the module Keccak (Q-S5-30 (b)).
+- `langc signer --height H -o FILE` writes the signer module for one
+  height H, 0 to 20 (Q-S5-32 (a), Q-S5-33 (b)). The module has the import
+  `env.commit` and the exports `keygen`, `publicKey`, `next`, `sign` and
+  `verify`. src/wasm.c writes WOTS+, the L-tree and treeHash as hand Wasm
+  loops over the internal `keccak256` (Q-S5-31 (a)). This is a hand port
+  of the S4 domain algorithms (trusted base). Only `next` calls
+  `env.commit`. A second `sign` of one leaf traps (L5 at run time).
+- `keygen (id, start, skSeed, skPrf, pubSeed)` starts at the position
+  from the state file (Q-S5-33 (b)). `sign (ks, leaf, m)` traps unless
+  the leaf is after the last signed leaf and not after the next position
+  (Q-S5-38 (a)). `verify (pk, m, sig)` gives 1 or 0, and 0 when the key
+  height is not H (Q-S5-39 (a)).
+- Harness: test/run-wasm.mjs `FILE --key DIR` reads the stdin lines
+  `keygen ID SKSEED SKPRF PUBSEED [START]`, `next`, `rootSum`, `sign LEAF
+  M` and `verify M` (Q-S5-35 (a), Q-S5-37 (a)). The `commit` import writes
+  the position through a temporary file, fsync, atomic rename and
+  directory fsync. An exclusive DIR/.signer.lock serializes writers;
+  after a crash it requires explicit recovery once the writer has stopped
+  and the state has been checked. Empty or malformed state is refused.
+  Wasm key IDs are normalized to u64, and input words must fit u64.
+  Then it writes the
+  EIP-8310 keystore JSON DIR/ID.json (Q-S5-3 (a), `uuid` Q-S5-36 (a)). A
+  position that is not larger than the stored position gives
+  `REFUSE_HIGH_WATER`. There is no silent reset.
+- Differential at h = 4: test/wasm/signer4.lang and test/wasm/sign4.lang
+  give `rootSum`, `sigSum` and the `verify` results in `langc eval`
+  (Q-S5-34 (a), D37). test/gate.sh compares them with the module (D38).
+  At h = 10 the gate compares only the last line, `verify true` (D39,
+  Q-S5-11 (a)).
+- IR rows: test/ir digit, hash, hashkat, keystore (`ir_digest`) and
+  tweakflag (D40). tweakflag isolates the trap flag of a Tweak field:
+  the kind field wraps to 0 under the width check, and the tree field has
+  no width check.
+- New codes: `REFUSE_RUNTIME_KEYSTORE`, `REFUSE_TARGET_NODE` (no IR node
+  gives it now, no fixture, Q-S5-29 (a)) and `REFUSE_HIGH_WATER`.
+  docs/DIAGNOSTICS.md has 49 codes (S4: 46).
+
+Gate counts (`make check`): examples 10 checked, 0 failed; parse refusals
+12; check refusals 43; evals 162; ir 14 lowered; wasm 19 modules valid;
+differential 951 cases, 0 mismatches; signer 2 modules valid, 28 rows;
+fmt 115 canonical, 6 non-canonical pairs; json 33 fixtures; diagnostics
+49 codes, 31 with a fixture, 18 with no fixture; gate 0 failures; review
+and domain regressions passed.
+
+Review regressions: hash nodes return a validation flag with their digest
+address, so unused invalid digests in fold state do not trap. The
+hash-lazy differential fixture covers width errors and overflow flags.
+signer-review.mjs injects a crash during state replacement, checks stale
+lock and empty-state refusal, and exercises key IDs at the i64 boundary.
+The C domain regressions also check explicit affine andThen continuations
+over a copyable argument, with and without a result hint.
+
+### Mutants
+
+There are 11 mutants on src/wasm.c. 10 are killed. M6 is a known
+survivor (Q-S5-40 (a)). Each mutant is an exact-match edit, then `make
+-B`, then the rows. U5 mutated the Keccak (the U5 flag mutant survived
+and is M1 of U7). U7 mutated the signer.
+
+| Mutant | Site | Edit | Killer |
+|---|---|---|---|
+| U5 rc | `keccak_f` | round constant 1 is 0x8083, not 0x8082 | ir row hashkat |
+| U5 bswap | `keccak256` | the squeeze stores a lane with no byte swap | ir row hashkat |
+| U5 pad06 | `keccak256` | the pad byte is 0x06, not 0x01 | ir row hashkat |
+| U5 width | `emit_adrs` | a field above 32 bits does not trap | ir rows hash, hashkat |
+| M1 flag | `emit_adrs` | the trap flag of a Tweak field is dropped | ir row tweakflag `kindFlag` |
+| M2 bound | `sign` | no check of the signed bound | signer row: a second `sign` of one leaf gives no trap |
+| M3 sibling | auth path | node k at i >> k, not (i >> k) xor 1 | signer rows `sigSum`, `verify` |
+| M4 csum | WOTS+ checksum | digit 65 is csum & 15, not (csum >> 4) & 15 | signer rows `sigSum` |
+| M5 steps | `wots_pk_from_sig` | a chain runs 16 - digit steps, not 15 - digit | signer rows `verify` |
+| M6 height | `verify` | no check of the key height H | none: known survivor (Q-S5-40 (a)) |
+| M7 side | `root_from_path` | an odd node keeps the even order | signer row `verify` at position 7 |
+
+### Open items from S5
+
+- M6 survives: no gate row gives `verify` a public key of another height
+  (Q-S5-40 (a), no new harness line).
+- The signer loops are a hand port of the S4 domain algorithms (trusted
+  base). The h = 4 differential and the mutants check the port. At h =
+  10 only the module runs, with no eval compare (Q-S5-11 (a)).
+- The module does not zeroize the secrets of a dropped leaf (O6).
+- The keystore JSON has the test seeds in clear and no `crypto` block
+  (O13).
+- A restored backup is outside the checker (O12). The harness refuses
+  only a position that is not larger than DIR/ID.state.
+- S6 adds the EVM verifier (PLAN section 5.1).

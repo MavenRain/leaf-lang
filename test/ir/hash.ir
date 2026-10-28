@@ -1,0 +1,60 @@
+func chainEq (nat) -> bool, 12 locals
+  l1 := alloc [7, l0, 8, 9]
+  l2 := alloc [0, 0, 0, 1, 0]
+  l3 := alloc [0, 0, 0, l2, 0]
+  l4 := alloc [0, 0, 0, l3, 0]
+  l5 := alloc [0, 0, 0, l4, 0]
+  l6 := alloc [0, 0, 0, l5, 0]
+  l7 := alloc [7, 2, 8, 9]
+  l8, l9 := hash thChain [l1, l6, l7]
+  l10 := alloc [7, l0, 8, 9]
+  l11 := mul(mul(mul(eq(load(l8, 0), load(l10, 0)), eq(load(l8, 1), load(l10, 1))), eq(load(l8, 2), load(l10, 2))), eq(load(l8, 3), load(l10, 3)))
+  if l9 {
+    trap
+  } else {
+  }
+  return l11
+func nodeEq (nat) -> bool, 13 locals
+  l1 := alloc [7, 1, 8, 9]
+  l2 := alloc [0, 0, 0, l0, 0]
+  l3 := alloc [0, 0, 0, l2, 0]
+  l4 := alloc [0, 0, 0, l3, 0]
+  l5 := alloc [0, 0, 0, l4, 0]
+  l6 := alloc [0, 0, 0, l5, 0]
+  l7 := alloc [7, 2, 8, 9]
+  l8 := alloc [7, 3, 8, 9]
+  l9, l10 := hash thNode [l1, l6, l7, l8]
+  l11 := alloc [7, 4, 8, 9]
+  l12 := mul(mul(mul(eq(load(l9, 0), load(l11, 0)), eq(load(l9, 1), load(l11, 1))), eq(load(l9, 2), load(l11, 2))), eq(load(l9, 3), load(l11, 3)))
+  if l10 {
+    trap
+  } else {
+  }
+  return l12
+func msgEq (nat) -> bool, 8 locals
+  l1 := alloc [7, 1, 8, 9]
+  l2 := alloc [7, 2, 8, 9]
+  l3 := alloc [7, 3, 8, 9]
+  l4, l5 := hash thMsg [l1, l2, l0, l3]
+  l6 := alloc [7, 4, 8, 9]
+  l7 := mul(mul(mul(eq(load(l4, 0), load(l6, 0)), eq(load(l4, 1), load(l6, 1))), eq(load(l4, 2), load(l6, 2))), eq(load(l4, 3), load(l6, 3)))
+  if l5 {
+    trap
+  } else {
+  }
+  return l7
+func prfEq (nat) -> bool, 11 locals
+  l1 := alloc [7, l0, 8, 9]
+  l2 := alloc [0, 0, 0, 2, 0]
+  l3 := alloc [0, 0, 0, l2, 0]
+  l4 := alloc [0, 0, 0, l3, 0]
+  l5 := alloc [0, 0, 0, l4, 0]
+  l6 := alloc [0, 0, 0, l5, 0]
+  l7, l8 := hash prf [l1, l6]
+  l9 := alloc [7, 5, 8, 9]
+  l10 := mul(mul(mul(eq(load(l7, 0), load(l9, 0)), eq(load(l7, 1), load(l9, 1))), eq(load(l7, 2), load(l9, 2))), eq(load(l7, 3), load(l9, 3)))
+  if l8 {
+    trap
+  } else {
+  }
+  return l10

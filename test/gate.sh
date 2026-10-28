@@ -110,6 +110,31 @@ for f in examples/*.lang; do
   entries=$(build/langc abi "$f" | rg -c '.' || echo 0)
   [ "$status" -eq 0 ] && [ "$funcs" -eq "$entries" ] || { echo "FAIL ir $f: exit $status, $funcs funcs for $entries entries: $(head -n 1 "$tmp/ir.err")"; fail=$((fail + 1)); }
 done
+# ir_expect NAME: `langc ir test/ir/NAME.lang` is byte-equal to test/ir/NAME.ir.
+ir_expect() {
+  irs=$((irs + 1))
+  status=0
+  build/langc ir "test/ir/$1.lang" > "$tmp/ir.txt" 2> "$tmp/ir.err" || status=$?
+  [ "$status" -eq 0 ] && cmp -s "$tmp/ir.txt" "test/ir/$1.ir" || { echo "FAIL ir $1.lang: exit $status, not test/ir/$1.ir: $(head -n 1 "$tmp/ir.err")"; fail=$((fail + 1)); }
+}
+ir_expect hash
+ir_expect digit
+ir_expect tweakflag
+# ir_digest NAME: the sha-256 of `langc ir test/ir/NAME.lang` is the one line
+# of test/ir/NAME.sha256 (Q-S5-24). A keystore IR is too large for an .ir
+# file. The tool is `shasum -a 256` (macOS), else `sha256sum`.
+ir_digest() {
+  irs=$((irs + 1))
+  status=0
+  build/langc ir "test/ir/$1.lang" > "$tmp/ir.txt" 2> "$tmp/ir.err" || status=$?
+  if command -v shasum > /dev/null; then
+    sum=$(shasum -a 256 < "$tmp/ir.txt")
+  else
+    sum=$(sha256sum < "$tmp/ir.txt")
+  fi
+  [ "$status" -eq 0 ] && [ "${sum%% *}" = "$(cat "test/ir/$1.sha256")" ] || { echo "FAIL ir $1.lang: exit $status, sha-256 ${sum%% *} is not test/ir/$1.sha256: $(head -n 1 "$tmp/ir.err")"; fail=$((fail + 1)); }
+}
+ir_digest keystore
 echo "ir: $irs lowered"
 # ir_refused NAME CODE: `langc check test/ir/NAME.lang` accepts it, and
 # `langc ir` must exit 1 and print `langc: CODE: ...` on stderr.
@@ -125,6 +150,7 @@ ir_refused() {
   esac
 }
 ir_refused closure REFUSE_RUNTIME_CLOSURE
+ir_refused keystore-seed REFUSE_RUNTIME_KEYSTORE
 got=$(build/langc eval test/ir/lazy.lang lazy 3 2>&1) || true
 [ "$got" = "3" ] || { echo "FAIL lazy.lang: want 3, got $got"; fail=$((fail + 1)); }
 build/langc ir test/ir/lazy.lang > /dev/null || { echo "FAIL lazy.lang: ir"; fail=$((fail + 1)); }
@@ -148,7 +174,8 @@ ir_refused path REFUSE_RUNTIME_PATH
 wasms=0
 cases=0
 mismatches=0
-for f in examples/*.lang test/ir/spine.lang test/ir/lazy.lang test/ir/proof-trap.lang; do
+for f in examples/*.lang test/ir/spine.lang test/ir/lazy.lang test/ir/proof-trap.lang test/ir/digit.lang \
+  test/ir/hash.lang test/ir/keystore.lang test/ir/hashkat.lang test/ir/tweakflag.lang test/ir/hash-lazy.lang; do
   w="$tmp/$(basename "$f" .lang).wasm"
   wasms=$((wasms + 1))
   if ! build/langc build "$f" -o "$w" 2>"$tmp/w.err" || ! wasm-validate "$w" 2>>"$tmp/w.err" ||
@@ -181,6 +208,118 @@ echo "differential: $cases cases, $mismatches mismatches"
 # A Bool argument larger than 1 traps (langc eval refuses it with EVAL_ARGS).
 got=$(node test/run-wasm.mjs "$tmp/entries.wasm" pick 2 4 9 2>&1) || true
 [ "$got" = "trap" ] || { echo "FAIL wasm pick 2 4 9: want trap, got $got"; fail=$((fail + 1)); }
+# The signer module (docs/PLAN.md 5.2): `langc signer` writes one valid module
+# for each height. run-wasm.mjs --key DIR runs keygen and next on it. Each
+# next writes DIR/ID.state before the module goes on, and the harness refuses
+# a position that goes back (REFUSE_HIGH_WATER, exit 1).
+signers=0
+signer_rows=0
+for h in 4 10; do
+  if build/langc signer --height "$h" -o "$tmp/signer$h.wasm" 2>"$tmp/w.err" &&
+    wasm-validate "$tmp/signer$h.wasm" 2>>"$tmp/w.err" && wasm-objdump -x "$tmp/signer$h.wasm" >/dev/null 2>>"$tmp/w.err"; then
+    signers=$((signers + 1))
+  else
+    echo "FAIL signer h = $h: $(head -n 1 "$tmp/w.err")"
+    fail=$((fail + 1))
+  fi
+done
+for bad in "--height 21 -o $tmp/bad.wasm" "-o $tmp/bad.wasm" "--height 4"; do
+  signer_rows=$((signer_rows + 1))
+  status=0
+  build/langc signer $bad 2>/dev/null || status=$?
+  [ "$status" -eq 2 ] || { echo "FAIL signer $bad: want exit 2, got $status"; fail=$((fail + 1)); }
+done
+# signer_run H DIR STATUS WANT LINE...: the LINEs on stdin of the h = H module
+# with --key DIR give exit STATUS and the output lines WANT (joined by spaces).
+signer_run() {
+  signer_rows=$((signer_rows + 1))
+  sh_h=$1
+  sh_dir=$2
+  sh_status=$3
+  sh_want=$4
+  shift 4
+  printf '%s\n' "$@" >"$tmp/in.txt"
+  status=0
+  node test/run-wasm.mjs "$tmp/signer$sh_h.wasm" --key "$sh_dir" <"$tmp/in.txt" >"$tmp/out.txt" 2>"$tmp/w.err" || status=$?
+  got=$(paste -s -d ' ' "$tmp/out.txt")
+  [ "$status" -eq "$sh_status" ] && [ "$got" = "$sh_want" ] ||
+    { echo "FAIL signer h = $sh_h '$1': want exit $sh_status '$sh_want', got exit $status '$got' $(head -n 1 "$tmp/w.err")"; fail=$((fail + 1)); }
+}
+# signer_has FILE TEXT: FILE has a line TEXT (after the indent, before a comma).
+signer_has() {
+  signer_rows=$((signer_rows + 1))
+  rg -q "^ *$2,?\$" "$1" 2>/dev/null || { echo "FAIL signer $1: no line $2"; fail=$((fail + 1)); }
+}
+seeds="000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f 202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f 404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"
+mkdir "$tmp/k4" "$tmp/k10"
+signer_run 4 "$tmp/k4" 0 "4096 $(seq 16 | paste -s -d ' ' -) 0" "keygen 1 $seeds" $(seq 17 | awk '{ print "next" }')
+signer_has "$tmp/k4/1.state" 16
+signer_has "$tmp/k4/1.json" '"uuid": "00000000-0000-8000-8000-000000000001"'
+signer_has "$tmp/k4/1.json" '"tree_height": 4'
+signer_has "$tmp/k4/1.json" '"lifetime_leaves": 16'
+signer_has "$tmp/k4/1.json" '"high_water": 16'
+signer_has "$tmp/k4/1.json" '"capacity": 0'
+# A stale copy of the key (START 0) is refused, and the state stays.
+signer_run 4 "$tmp/k4" 1 "4096 refused REFUSE_HIGH_WATER" "keygen 1 $seeds 0" next
+signer_has "$tmp/k4/1.state" 16
+signer_run 4 "$tmp/k4" 0 "trap" "keygen 1 $seeds 17"
+signer_run 4 "$tmp/k4" 0 "4096 0" "keygen 1 $seeds 16" next
+signer_has "$tmp/k4/1.state" 16
+# The keygen root (D28 to D30): the harness rootSum of the h = 4 root is the
+# eval rootSum of test/wasm/signer4.lang (the same seeds), and the JSON has
+# the pubkey block.
+root_sum=$(build/langc eval test/wasm/signer4.lang rootSum 2>&1) || true
+mkdir "$tmp/k4r"
+signer_run 4 "$tmp/k4r" 0 "4096 rootSum $root_sum" "keygen 1 $seeds" rootSum
+signer_has "$tmp/k4r/1.json" '"pub_seed": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f"'
+signer_run 10 "$tmp/k10" 0 "4096 1" "keygen 2 $seeds" next
+signer_has "$tmp/k10/2.state" 1
+signer_has "$tmp/k10/2.json" '"capacity": 1023'
+# sign and verify (D36 to D39): at h = 4 the harness sigSum of the signature
+# at the position P is the eval sumP of test/wasm/sign4.lang (the same seeds
+# and M), and `verify M` gives the eval okP. A second sign of one leaf traps
+# (L5), and `verify M2` gives the eval bad. At h = 10 there is no eval value
+# (Q-S5-11 (a)), so only the last line is compared (D39).
+# signer_last H DIR WANT LINE...: as signer_run with exit 0, but the last
+# output line only is compared with WANT.
+signer_last() {
+  signer_rows=$((signer_rows + 1))
+  sl_h=$1
+  sl_dir=$2
+  sl_want=$3
+  shift 3
+  printf '%s\n' "$@" >"$tmp/in.txt"
+  status=0
+  node test/run-wasm.mjs "$tmp/signer$sl_h.wasm" --key "$sl_dir" <"$tmp/in.txt" >"$tmp/out.txt" 2>"$tmp/w.err" || status=$?
+  got=$(tail -n 1 "$tmp/out.txt")
+  [ "$status" -eq 0 ] && [ "$got" = "$sl_want" ] ||
+    { echo "FAIL signer h = $sl_h '$1': want exit 0 last line '$sl_want', got exit $status '$got' $(head -n 1 "$tmp/w.err")"; fail=$((fail + 1)); }
+}
+# sign_bool NAME: the eval Bool NAME of test/wasm/sign4.lang as true or false.
+sign_bool() {
+  case "$(build/langc eval test/wasm/sign4.lang "$1" 2>&1)" in
+    1) echo true ;;
+    0) echo false ;;
+    *) echo "eval-error" ;;
+  esac
+}
+msg=6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d
+msg2=6e6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d
+mkdir "$tmp/k4s"
+sum0=$(build/langc eval test/wasm/sign4.lang sum0 2>&1) || true
+sum7=$(build/langc eval test/wasm/sign4.lang sum7 2>&1) || true
+sum15=$(build/langc eval test/wasm/sign4.lang sum15 2>&1) || true
+signer_run 4 "$tmp/k4s" 0 "4096 1 sigSum $sum0 verify $(sign_bool ok0)" "keygen 3 $seeds 0" next "sign 1 $msg" "verify $msg"
+signer_run 4 "$tmp/k4s" 0 "4096 8 sigSum $sum7 verify $(sign_bool ok7)" "keygen 4 $seeds 7" next "sign 8 $msg" "verify $msg"
+signer_run 4 "$tmp/k4s" 0 "4096 16 sigSum $sum15 verify $(sign_bool ok15)" "keygen 5 $seeds 15" next "sign 16 $msg" "verify $msg"
+signer_run 4 "$tmp/k4s" 0 "4096 1 sigSum $sum0 trap" "keygen 6 $seeds" next "sign 1 $msg" "sign 1 $msg"
+signer_run 4 "$tmp/k4s" 0 "4096 8 sigSum $sum7 verify $(sign_bool bad)" "keygen 7 $seeds 7" next "sign 8 $msg" "verify $msg2"
+for p in 0 511 1023; do
+  signer_last 10 "$tmp/k10" "verify true" "keygen 3 $seeds $p" next "sign $((p + 1)) $msg" "verify $msg"
+done
+echo "signer: $signers modules valid, $signer_rows rows"
+build/langc signer --height 1 -o "$tmp/signer-review.wasm"
+node test/signer-review.mjs "$tmp/signer-review.wasm"
 # The canonical printer. Each committed .lang file that parses is canonical:
 # `langc fmt F` equals F byte for byte, so fmt is idempotent on it. The
 # fronttool AST dump of F equals the dump of `fmt F` (the round trip). Each
@@ -255,10 +394,10 @@ for want in 'progress-part:{"parsed":"3 of 3","typed":"2 of 3","affine":"2 of 3"
   [ "$got" = "${want#*:}" ] || { echo "FAIL progress ${want%%:*}: want ${want#*:}, got $got"; fail=$((fail + 1)); }
 done
 
-# docs/DIAGNOSTICS.md has one row for each code in src/. Each code has
-# test/json/CODE.lang (its first JSON line has that code), or its row gives
-# "no fixture:" and a reason; not the two.
-rg -o -I -N -r '$1$2$3' '"((?:LEX|PARSE|REFUSE|TYPE|NAME|EVAL|GLUE|UNGLUE|W)_[A-Z_]+)"|"(OOM|IO|IO_SIZE|USAGE|INTERNAL)"|langc: ((?:EVAL|REFUSE|TYPE)_[A-Z_]+):' src |
+# docs/DIAGNOSTICS.md has one row for each code in src/ and in
+# test/run-wasm.mjs. Each code has test/json/CODE.lang (its first JSON line
+# has that code), or its row gives "no fixture:" and a reason; not the two.
+rg -o -I -N -r '$1$2$3' '"((?:LEX|PARSE|REFUSE|TYPE|NAME|EVAL|GLUE|UNGLUE|W)_[A-Z_]+)"|"(OOM|IO|IO_SIZE|USAGE|INTERNAL)"|langc: ((?:EVAL|REFUSE|TYPE)_[A-Z_]+):' src test/run-wasm.mjs |
   LC_ALL=C sort -u >"$tmp/src-codes.txt"
 rg -o -N -r '$1' '^\| `([A-Z_]+)` \|' docs/DIAGNOSTICS.md | LC_ALL=C sort -u >"$tmp/doc-codes.txt"
 if ! cmp -s "$tmp/src-codes.txt" "$tmp/doc-codes.txt"; then

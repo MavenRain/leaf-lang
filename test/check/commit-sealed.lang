@@ -1,0 +1,4 @@
+-- A program cannot build a commit node (Q-S5-7 (a)). Only the core next
+-- writes a keystore position, so a reset cannot be written.
+reset : Durable ℕ
+reset = commit ℕ 0 (done ℕ 0)

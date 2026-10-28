@@ -3,6 +3,6 @@ base : ℕ
 base = 7 -- an end-of-line comment moves to its own line
 
 
-next : ℕ
-next   =   natAdd base 1
+addOne : ℕ
+addOne   =   natAdd base 1
 -- A trailing comment stays at the end.

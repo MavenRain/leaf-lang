@@ -1,0 +1,4 @@
+-- L5 (Q-S5-10 (a)): two next of one keystore is a reset. The second use of
+-- the keystore is refused.
+reset : Keystore ⊸ Durable (Option (Leaf × Keystore))
+reset ks = andThen (next ks) (λ o → next ks)

@@ -1,0 +1,145 @@
+-- Durable sequencing and the law rows at h = 4 (S5 U3, Q-S5-6 (a),
+-- Q-S5-10 (a)). andThen sequences the trees of next, and each commit node
+-- stays in the tree. A Sig leaves the scope of its leaf in a pair
+-- (Q-S5-18 (a)).
+skSeed : Digest
+skSeed = digest 9 10 11 12
+
+skPrf : Digest
+skPrf = digest 5 6 7 8
+
+pubSeed : Digest
+pubSeed = digest 1 2 3 4
+
+msg : Digest
+msg = digest 13 14 15 16
+
+ks4 : Keystore
+ks4 = keygen skSeed skPrf pubSeed (v1Params 4)
+
+ks0 : Keystore
+ks0 = keygen skSeed skPrf pubSeed (v1Params 0)
+
+pk4 : PubKey
+pk4 = unpack (publicKey ks4) (λ pk ks → pk)
+
+-- andThen on done applies the continuation.
+seqDone : Durable ℕ
+seqDone = andThen (done ℕ 3) (λ n → done ℕ (natAdd n 1))
+
+-- andThen on commit goes under the node. The h = 0 keystore has one leaf:
+-- next at 0 commits 1, and next at 1 gives none.
+seqTwo : Durable ℕ
+seqTwo = andThen (next ks0) (λ o → option (done ℕ 7) (λ p → unpack p (λ l ks → andThen (next ks) (λ o2 → done ℕ (option 0 (λ q → 9) o2)))) o)
+
+-- A Sig with its height and the next keystore.
+Signed : Type 0
+Signed = Option (((h : ℕ) × Sig h) × Keystore)
+
+-- One next, then the leaf signs msg. The Sig and the next keystore leave
+-- the scope of the leaf as a pair.
+step : Keystore ⊸ Durable Signed
+step ks = andThen (next ks) (λ o → done Signed (option none (λ p → unpack p (λ l kr → some (pack (pack (leafHeight l) (sign l msg)) kr))) o))
+
+-- 1 when the index i of a Sig is the count c, else 0.
+good : (c : ℕ) → (i : ℕ) → ℕ
+good c i = boolElim (λ b → ℕ) 1 0 (natEq i c)
+
+-- The index of a Sig. unpack gives a Sig at 1, and an argument at an omega
+-- binder (good, differs) uses its variables at omega, also through
+-- witness. The option arm binds the index (a ℕ, copyable) at omega.
+indexOf : (h : ℕ) × Sig h ⊸ Option ℕ
+indexOf s = some (witness (payload s))
+
+-- One step of the walk at the count c: step, then the rest of the walk on
+-- the next keystore. The result adds good c i (i is the index of the Sig)
+-- to the result of the rest.
+walkFrom : (rest : Keystore ⊸ Durable ℕ) → (c : ℕ) → Keystore ⊸ Durable ℕ
+walkFrom rest c ks = andThen (step ks) (λ o → option (done ℕ 0) (λ q → unpack q (λ s kr → option (done ℕ 0) (λ i → andThen (rest kr) (λ n → done ℕ (natAdd n (good c i)))) (indexOf s))) o)
+
+-- The end of the walk: next gives none, thus 0. A leaf gives 100.
+walkEnd : Keystore ⊸ Durable ℕ
+walkEnd ks = andThen (next ks) (λ o → done ℕ (option 0 (λ p → 100) o))
+
+-- The walk over the positions 0 to 15, then the end at 16.
+walk : Keystore ⊸ Durable ℕ
+walk = walkFrom (walkFrom (walkFrom (walkFrom (walkFrom (walkFrom (walkFrom (walkFrom (walkFrom (walkFrom (walkFrom (walkFrom (walkFrom (walkFrom (walkFrom (walkFrom walkEnd 15) 14) 13) 12) 11) 10) 9) 8) 7) 6) 5) 4) 3) 2) 1) 0
+
+-- L1 (Q-S5-10 (a)): the walk of ks4 commits 1 to 16 and holds 16. Each of
+-- the 16 Sigs has the index of its step, and next gives none at 16. The
+-- verify half of L1 is the rows l1Lo and l1Hi.
+l1Walk : Durable ℕ
+l1Walk = walk ks4
+
+-- The commit nodes of a tree under the position c: true when each node
+-- writes the position after the node above it, from c + 1, and the tree
+-- holds 16 at the position 16.
+commitsFrom : Durable ℕ ⊸ ℕ → Bool
+commitsFrom d = fold (λ n c → boolElim (λ b → Bool) (natEq n 16) false (natEq c 16)) (λ i r c → boolElim (λ b → Bool) (r i) false (natEq i (natAdd c 1))) d
+
+-- L3 and L4: the sign at the count c is under the commit node of c + 1,
+-- and the positions increase strictly.
+l3Walk : Bool
+l3Walk = commitsFrom (walk ks4) 0
+
+-- L3 on one tree of next: the leaf is under commit (i + 1), with i the
+-- index of its Sig.
+underCommit : Durable (Option (Leaf × Keystore)) ⊸ ℕ → Bool
+underCommit d = fold (λ o c → option false (λ p → unpack p (λ l kr → natEq c (natAdd (witness (sign l msg)) 1))) o) (λ i r c → r i) d
+
+l3First : Bool
+l3First = underCommit (next ks4) 0
+
+-- 1 when the Sig in o has an index other than i.
+differs : (i : ℕ) → Signed ⊸ Bool
+differs i o = option false (λ q → unpack q (λ s kr → boolElim (λ b → Bool) false true (natEq (witness (payload s)) i))) o
+
+-- L5 (Q-S5-10 (a)): one program signs two times, and the two Sigs have
+-- different indices.
+twoSigs : Keystore ⊸ Durable Bool
+twoSigs ks = andThen (step ks) (λ o → option (done Bool false) (λ q → unpack q (λ s kr → option (done Bool false) (λ i → andThen (step kr) (λ o2 → done Bool (differs i o2))) (indexOf s))) o)
+
+l5Distinct : Durable Bool
+l5Distinct = twoSigs ks4
+
+-- L1 verify (Q-S5-18 (a)): unpack gives a Sig at 1, and the sig binder of
+-- verifyAt is omega. Thus each Sig leaves the scope of its leaf as a
+-- top-level pair. opened gives the value of a tree of next without its
+-- commit nodes.
+opened : Durable (Option (Leaf × Keystore)) ⊸ Option (Leaf × Keystore)
+opened d = fold (λ o → o) (λ n r → r) d
+
+-- One next: the next keystore, or ks0 when next gives none.
+advance : Keystore ⊸ Keystore
+advance ks = option ks0 (λ p → unpack p (λ l kr → kr)) (opened (next ks))
+
+-- The keystore of ks4 after i nexts.
+ksAt : (i : ℕ) → Keystore
+ksAt i = fold advance ks4 i
+
+-- The Sig of msg at the position i of ks4, with its height.
+sigAt : (i : ℕ) → (h : ℕ) × Sig h
+sigAt i = option (pack 0 (pack 0 (pack msg (pack (λ k → msg) (λ k → msg))))) (λ p → unpack p (λ l ks → pack (leafHeight l) (sign l msg))) (opened (next (ksAt i)))
+
+-- true when the Sig s verifies under pk4 and has the index i.
+l1Sig : (i : ℕ) → (s : (h : ℕ) × Sig h) → Bool
+l1Sig i s = boolElim (λ b → Bool) (natEq (witness (payload s)) i) false (verifyAt (witness s) pk4 msg (payload s))
+
+l1At : (i : ℕ) → Bool
+l1At i = l1Sig i (sigAt i)
+
+-- The fold state of l1From: the position and the and of the results.
+lawState : (i : ℕ) → (b : Bool) → ℕ × Bool
+lawState i b = pack i b
+
+-- l1From lo n is true when l1At is true at each position lo to lo + n - 1.
+l1From : (lo : ℕ) → (n : ℕ) → Bool
+l1From lo n = payload (fold (λ (st : ℕ × Bool) → lawState (natAdd (witness st) 1) (boolElim (λ b → Bool) (l1At (witness st)) false (payload st))) (lawState lo true) n)
+
+-- L1 verify over the positions 0 to 15 of ks4, in two rows (one row of
+-- 16 positions takes more than the eval fuel of 20000000 steps).
+l1Lo : Bool
+l1Lo = l1From 0 8
+
+l1Hi : Bool
+l1Hi = l1From 8 8

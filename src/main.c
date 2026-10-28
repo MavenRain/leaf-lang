@@ -18,7 +18,8 @@ typedef enum {
   CMD_IR,
   CMD_ABI,
   CMD_BUILD,
-  CMD_FMT
+  CMD_FMT,
+  CMD_SIGNER
 } Command;
 
 typedef struct {
@@ -30,6 +31,7 @@ typedef struct {
   const char *out_path;
   int runtime;
   int json;
+  unsigned height;
 } Options;
 
 static const struct {
@@ -42,6 +44,7 @@ static const struct {
   {"abi", CMD_ABI},
   {"build", CMD_BUILD},
   {"fmt", CMD_FMT},
+  {"signer", CMD_SIGNER},
 };
 
 static int usage(FILE *err) {
@@ -50,7 +53,8 @@ static int usage(FILE *err) {
         "       langc ir PROG\n"
         "       langc abi PROG\n"
         "       langc build PROG -o OUT [--runtime]\n"
-        "       langc fmt PROG\n", err);
+        "       langc fmt PROG\n"
+        "       langc signer --height H -o OUT\n", err);
   return 2;
 }
 
@@ -76,6 +80,33 @@ static int parse_build_options(int argc, char **argv, Options *opt, Diag *diag) 
   return opt->out_path != NULL ? 1 : diag_fail(diag, "USAGE", NULL, "build needs -o OUT");
 }
 
+/* H is decimal, 0 to TARGET_SIGNER_HEIGHT_MAX. */
+static int parse_height(const char *text, unsigned *out) {
+  size_t len = strlen(text);
+  size_t i = 0;
+  unsigned value = 0;
+  for (; i < len && len <= 2 && text[i] >= '0' && text[i] <= '9'; i++) value = value * 10u + (unsigned)(text[i] - '0');
+  *out = value;
+  return len > 0 && i == len && value <= TARGET_SIGNER_HEIGHT_MAX;
+}
+
+/* langc signer --height H -o OUT (D23). There is no program path. */
+static int parse_signer_options(int argc, char **argv, Options *opt, Diag *diag) {
+  int has_height = 0;
+  opt->prog_path = NULL;
+  for (int i = 2; i < argc; i += 2) {
+    int is_out = strcmp(argv[i], "-o") == 0 && i + 1 < argc;
+    int is_height = strcmp(argv[i], "--height") == 0 && i + 1 < argc;
+    if (!is_out && !is_height) return diag_fail(diag, "USAGE", NULL, "unknown signer argument '%s'", argv[i]);
+    if (is_height && !parse_height(argv[i + 1], &opt->height)) {
+      return diag_fail(diag, "USAGE", NULL, "the signer height '%s' is not 0 to %u", argv[i + 1], TARGET_SIGNER_HEIGHT_MAX);
+    }
+    opt->out_path = is_out ? argv[i + 1] : opt->out_path;
+    has_height |= is_height;
+  }
+  return opt->out_path != NULL && has_height ? 1 : diag_fail(diag, "USAGE", NULL, "signer needs --height H -o OUT");
+}
+
 static int parse_options(int argc, char **argv, Options *opt, Diag *diag) {
   memset(opt, 0, sizeof *opt);
   if (argc < 3 || !find_command(argv[1], &opt->command)) {
@@ -98,6 +129,8 @@ static int parse_options(int argc, char **argv, Options *opt, Diag *diag) {
       return 1;
     case CMD_BUILD:
       return parse_build_options(argc, argv, opt, diag);
+    case CMD_SIGNER:
+      return parse_signer_options(argc, argv, opt, diag);
   }
   return 0;
 }
@@ -135,11 +168,20 @@ static int run_target(const Options *opt, Machine *machine, Diag *diag) {
     case CMD_EVAL:
     case CMD_BUILD:
     case CMD_FMT:
+    case CMD_SIGNER:
       break;
   }
   out = fopen(opt->out_path, "wb");
   if (out == NULL) return diag_fail(diag, "IO", NULL, "cannot write '%s'", opt->out_path) + 1;
   ok = target_write(&prog, opt->runtime ? TARGET_PART_RUNTIME : TARGET_PART_MAIN, out, stderr);
+  return fclose(out) == 0 && ok ? 0 : 1;
+}
+
+/* Writes the signer module (D23). It reads no program. */
+static int run_signer(const Options *opt, Diag *diag) {
+  FILE *out = fopen(opt->out_path, "wb");
+  if (out == NULL) return diag_fail(diag, "IO", NULL, "cannot write '%s'", opt->out_path) + 1;
+  int ok = target_write_signer(opt->height, out, stderr);
   return fclose(out) == 0 && ok ? 0 : 1;
 }
 
@@ -159,6 +201,7 @@ static int run(const Options *opt, Arena *arena, Diag *diag) {
     case CMD_ABI:
     case CMD_BUILD:
     case CMD_FMT: /* run_fmt does fmt */
+    case CMD_SIGNER: /* run_signer writes the signer */
       break;
   }
   return run_target(opt, &machine, diag);
@@ -305,9 +348,10 @@ int main(int argc, char **argv) {
   }
   Arena arena;
   arena_init(&arena, ARENA_LIMIT_BYTES);
-  int status = opt.command == CMD_FMT     ? run_fmt(&opt, &arena, &diag)
-               : opt.command == CMD_CHECK ? run_check(&opt, &arena, &diag)
-                                          : run(&opt, &arena, &diag);
+  int status = opt.command == CMD_FMT      ? run_fmt(&opt, &arena, &diag)
+               : opt.command == CMD_CHECK  ? run_check(&opt, &arena, &diag)
+               : opt.command == CMD_SIGNER ? run_signer(&opt, &diag)
+                                           : run(&opt, &arena, &diag);
   arena_release(&arena);
   /* run_check prints its own diagnostics. */
   if (status != 0 && diag.set && opt.command != CMD_CHECK) diag_print(&diag, stderr);

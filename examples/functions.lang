@@ -2,14 +2,14 @@
 id : (n : ℕ) → ℕ
 id n = n
 
-next : ℕ → ℕ
-next n = natAdd n 1
+addOne : ℕ → ℕ
+addOne n = natAdd n 1
 
 twice : (f : (n : ℕ) → ℕ) → (n : ℕ) → ℕ
 twice f n = f (f n)
 
 four : ℕ
-four = twice next 2
+four = twice addOne 2
 
 pairOf : (x : ℕ) → (y : ℕ) → ℕ × ℕ
 pairOf x y = pack x y

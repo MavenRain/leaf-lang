@@ -26,7 +26,10 @@ static const char *const OP_NAMES[] = {
   [OP_LOGW_BITS] = "logWBits", [OP_DIGEST_VAL] = "digest",
   [OP_DIGEST_EQ] = "digestEq", [OP_DIGIT] = "digit",
   [OP_TH_CHAIN] = "thChain", [OP_TH_NODE] = "thNode", [OP_TH_MSG] = "thMsg",
-  [OP_PRF] = "prf",
+  [OP_PRF] = "prf", [OP_KEYGEN] = "keygen", [OP_PUBLIC_KEY] = "publicKey",
+  [OP_NEXT] = "next", [OP_SIGN] = "sign", [OP_LEAF_HEIGHT] = "leafHeight",
+  [OP_KEYSTORE_VAL] = "keystore", [OP_LEAF_VAL] = "leaf",
+  [OP_AND_THEN] = "andThen",
   [OP_FLAG_IF] = "flagIf", [OP_BOOL_ELIM] = "boolElim", [OP_PROJ] = "?", [OP_SSET] = "SSet", [OP_I] = "I",
   [OP_I0] = "i0", [OP_I1] = "i1", [OP_PATHP] = "PathP", [OP_PLAM] = "?",
   [OP_PAPP] = "?", [OP_INEG] = "~", [OP_IMIN] = "∧", [OP_IMAX] = "∨",
@@ -52,7 +55,10 @@ static const unsigned char OP_ARITY[] = {
   [OP_DIGEST] = 0, [OP_LOGW] = 0, [OP_LOGW1] = 0, [OP_LOGW2] = 0, [OP_LOGW4] = 0,
   [OP_LOGW8] = 0, [OP_LOGW_BITS] = 1, [OP_DIGEST_VAL] = 4, [OP_DIGEST_EQ] = 2,
   [OP_DIGIT] = 3, [OP_TH_CHAIN] = 3, [OP_TH_NODE] = 4, [OP_TH_MSG] = 4,
-  [OP_PRF] = 2, [OP_FLAG_IF] = 3, [OP_BOOL_ELIM] = 4, [OP_PROJ] = 1,
+  [OP_PRF] = 2, [OP_KEYGEN] = 4, [OP_PUBLIC_KEY] = 1, [OP_NEXT] = 2,
+  [OP_SIGN] = 2, [OP_LEAF_HEIGHT] = 1, [OP_KEYSTORE_VAL] = 4, [OP_LEAF_VAL] = 4,
+  [OP_AND_THEN] = 3,
+  [OP_FLAG_IF] = 3, [OP_BOOL_ELIM] = 4, [OP_PROJ] = 1,
   [OP_SSET] = 0, [OP_I] = 0, [OP_I0] = 0, [OP_I1] = 0, [OP_PATHP] = 3,
   [OP_PLAM] = 1, [OP_PAPP] = 4, [OP_INEG] = 1, [OP_IMIN] = 2, [OP_IMAX] = 2,
   [OP_PARTIAL] = 2, [OP_SYSTEM] = 3, [OP_SYSNIL] = 0, [OP_FROMPARTIAL] = 1,
@@ -1216,6 +1222,14 @@ static const Value *transp_ctor(Machine *m, const Value *const *a, uint32_t n) {
   case OP_TH_NODE:
   case OP_TH_MSG:
   case OP_PRF:
+  case OP_KEYGEN:
+  case OP_PUBLIC_KEY:
+  case OP_NEXT:
+  case OP_AND_THEN:
+  case OP_SIGN:
+  case OP_LEAF_HEIGHT:
+  case OP_KEYSTORE_VAL:
+  case OP_LEAF_VAL:
   case OP_FLAG_IF:
   case OP_BOOL_ELIM:
   case OP_PROJ:
@@ -1635,6 +1649,14 @@ static const Value *transp_op(Machine *m, const Value *h, const Value *const *a,
   case OP_TH_NODE:
   case OP_TH_MSG:
   case OP_PRF:
+  case OP_KEYGEN:
+  case OP_PUBLIC_KEY:
+  case OP_NEXT:
+  case OP_AND_THEN:
+  case OP_SIGN:
+  case OP_LEAF_HEIGHT:
+  case OP_KEYSTORE_VAL:
+  case OP_LEAF_VAL:
   case OP_FLAG_IF:
   case OP_BOOL_ELIM:
   case OP_PROJ:
@@ -1913,6 +1935,14 @@ static const Value *hcomp_op(Machine *m, const Value *const *a, uint32_t n) {
   case OP_TH_NODE:
   case OP_TH_MSG:
   case OP_PRF:
+  case OP_KEYGEN:
+  case OP_PUBLIC_KEY:
+  case OP_NEXT:
+  case OP_AND_THEN:
+  case OP_SIGN:
+  case OP_LEAF_HEIGHT:
+  case OP_KEYSTORE_VAL:
+  case OP_LEAF_VAL:
   case OP_FLAG_IF:
   case OP_BOOL_ELIM:
   case OP_PROJ:
@@ -2409,6 +2439,209 @@ static const Value *reduce_unglue(Machine *m, const Value *const *a, uint32_t n)
   return val_op(m, VAL_STUCK, OP_UNGLUE, 0, 0, a, n);
 }
 
+/* The index of the constructor NAME of the family FAMILY, or UINT32_MAX. */
+static uint32_t ctor_index(const Machine *m, const char *family, const char *name) {
+  uint32_t i;
+  for (i = 0; i < m->ctor_count; i++)
+    if (m->ctors[i].name != NULL && strcmp(m->ctors[i].name, name) == 0
+        && m->families[m->ctors[i].family].name != NULL
+        && strcmp(m->families[m->ctors[i].family].name, family) == 0)
+      return i;
+  return UINT32_MAX;
+}
+
+/* The end of the public key spine pack root (pack pubSeed (pack n (pack
+   logW h))) (domain.lang PubKey): h after 4 steps, else the first part
+   that is not a pair (*STEPS < 4). */
+static const Value *pk_end(const Value *pk, uint32_t *steps) {
+  const Value *s = pk;
+  *steps = 0;
+  while (*steps < 4u && val_is(s, OP_PACK) && s->argc == 2u) {
+    s = s->args[1];
+    (*steps)++;
+  }
+  return s;
+}
+
+/* 1 when V is a WANT value (a keystore or a leaf) whose public key has a
+   Nat height *H. Else *OUT is the trap, the stuck OP or an internal
+   error. */
+static int key_height(Machine *m, const Value *v, Op want, Op op, const Value *const *a, uint32_t n, uint64_t *h, const Value **out) {
+  const Value *s;
+  uint32_t steps;
+  if (blocked(m, v, op, 0, 0, a, n, out))
+    return 0;
+  if (!val_is(v, want) || v->argc != 4u) {
+    *out = internal(m, "a keystore operation on a value of the wrong form");
+    return 0;
+  }
+  s = pk_end(v->args[2], &steps);
+  if (blocked(m, s, op, 0, 0, a, n, out))
+    return 0;
+  if (steps != 4u || s->kind != VAL_NAT) {
+    *out = internal(m, "a public key with no Nat height");
+    return 0;
+  }
+  *h = s->nat;
+  return 1;
+}
+
+/* keygen skSeed skPrf pubSeed params (Q-S5-4 (a)): the keystore value
+   [skSeed, skPrf, pkFromSeeds skSeed pubSeed params, 0]. A trap argument
+   passes. A neutral argument, or no domain pkFromSeeds, gives the stuck
+   operation. */
+static const Value *reduce_keygen(Machine *m, const Value *const *a, uint32_t n) {
+  uint32_t d = def_index(m, "pkFromSeeds");
+  const Value *parts[4];
+  const Value *out;
+  uint32_t i;
+  for (i = 0; i < n; i++)
+    if (a[i]->kind == VAL_TRAP)
+      return a[i];
+  for (i = 0; i < n; i++)
+    if (blocked(m, a[i], OP_KEYGEN, 0, 0, a, n, &out))
+      return out;
+  if (d == UINT32_MAX)
+    return val_op(m, VAL_STUCK, OP_KEYGEN, 0, 0, a, n);
+  parts[0] = a[0];
+  parts[1] = a[1];
+  parts[2] = apply_value(m, apply_value(m, apply_value(m, def_value(m, d), a[0]), a[2]), a[3]);
+  parts[3] = val_nat(m, 0);
+  if (parts[2] == NULL || parts[3] == NULL)
+    return NULL;
+  if (parts[2]->kind == VAL_TRAP)
+    return parts[2];
+  return val_op(m, VAL_OP, OP_KEYSTORE_VAL, 0, 0, parts, 4u);
+}
+
+/* publicKey ks: the pair pack pk ks, with pk from the keystore value. */
+static const Value *reduce_public_key(Machine *m, const Value *const *a, uint32_t n) {
+  const Value *out;
+  if (blocked(m, a[0], OP_PUBLIC_KEY, 0, 0, a, n, &out))
+    return out;
+  if (!val_is(a[0], OP_KEYSTORE_VAL) || a[0]->argc != 4u)
+    return internal(m, "a keystore operation on a value of the wrong form");
+  return val_make(m, OP_PACK, 0, 2, a[0]->args[2], a[0], NULL);
+}
+
+/* next A ks, with A = Option (Leaf × Keystore) (Q-S5-17 (a)). At position
+   i of a keystore of height h, while i < 2^h: commit (i + 1) (done (some
+   (pack leaf ks'))), with the leaf value at i and the keystore value at i
+   + 1. Else done none. Each u64 position is below 2^h when h >= 64; the
+   position UINT64_MAX has no next position, so it ends the keystore too.
+   No domain Durable done and commit: the stuck operation. */
+static const Value *reduce_next(Machine *m, const Value *const *a, uint32_t n) {
+  uint32_t done = ctor_index(m, "Durable", "done");
+  uint32_t commit = ctor_index(m, "Durable", "commit");
+  const Value *ks = a[1];
+  const Value *parts[4];
+  const Value *node[3];
+  const Value *leaf;
+  const Value *rest;
+  const Value *pair;
+  const Value *tail;
+  const Value *out;
+  uint64_t h = 0;
+  uint64_t i;
+  if (a[0]->kind == VAL_TRAP)
+    return a[0];
+  if (!key_height(m, ks, OP_KEYSTORE_VAL, OP_NEXT, a, n, &h, &out))
+    return out;
+  if (blocked(m, ks->args[3], OP_NEXT, 0, 0, a, n, &out))
+    return out;
+  if (ks->args[3]->kind != VAL_NAT)
+    return internal(m, "a keystore position that is not a Nat");
+  if (done == UINT32_MAX || commit == UINT32_MAX)
+    return val_op(m, VAL_STUCK, OP_NEXT, 0, 0, a, n);
+  i = ks->args[3]->nat;
+  node[0] = a[0];
+  if ((h < 64u && i >= ((uint64_t)1 << h)) || i == UINT64_MAX) {
+    node[1] = val_make(m, OP_NONE, 0, 0, NULL, NULL, NULL);
+    return node[1] == NULL ? NULL : val_op(m, VAL_OP, OP_CTOR, done, 0, node, 2u);
+  }
+  parts[0] = ks->args[0];
+  parts[1] = ks->args[1];
+  parts[2] = ks->args[2];
+  parts[3] = val_nat(m, i + 1u);
+  if (parts[3] == NULL)
+    return NULL;
+  leaf = val_op(m, VAL_OP, OP_LEAF_VAL, 0, 0, ks->args, 4u);
+  rest = val_op(m, VAL_OP, OP_KEYSTORE_VAL, 0, 0, parts, 4u);
+  if (leaf == NULL || rest == NULL)
+    return NULL;
+  pair = val_make(m, OP_PACK, 0, 2, leaf, rest, NULL);
+  node[1] = pair == NULL ? NULL : val_make(m, OP_SOME, 0, 1, pair, NULL, NULL);
+  if (node[1] == NULL)
+    return NULL;
+  tail = val_op(m, VAL_OP, OP_CTOR, done, 0, node, 2u);
+  if (tail == NULL)
+    return NULL;
+  node[1] = parts[3];
+  node[2] = tail;
+  return val_op(m, VAL_OP, OP_CTOR, commit, 0, node, 3u);
+}
+
+/* andThen B d k (Q-S5-6 (a)), the bind of the free monad Durable: done a
+   gives k a, and commit i t gives commit i (andThen t k) at B. Any other
+   tree: the stuck operation. */
+static const Value *reduce_and_then(Machine *m, const Value *const *a, uint32_t n) {
+  uint32_t done = ctor_index(m, "Durable", "done");
+  uint32_t commit = ctor_index(m, "Durable", "commit");
+  const Value *rest[3];
+  const Value *node[3];
+  const Value *out;
+  if (a[0]->kind == VAL_TRAP)
+    return a[0];
+  if (blocked(m, a[1], OP_AND_THEN, 0, 0, a, n, &out))
+    return out;
+  if (val_is(a[1], OP_CTOR) && a[1]->inst == done && a[1]->argc == 2u)
+    return apply_value(m, a[2], a[1]->args[1]);
+  if (!val_is(a[1], OP_CTOR) || a[1]->inst != commit || a[1]->argc != 3u)
+    return val_op(m, VAL_STUCK, OP_AND_THEN, 0, 0, a, n);
+  rest[0] = a[0];
+  rest[1] = a[1]->args[2];
+  rest[2] = a[2];
+  node[0] = a[0];
+  node[1] = a[1]->args[1];
+  node[2] = reduce_and_then(m, rest, 3u);
+  if (node[2] == NULL || node[2]->kind == VAL_TRAP)
+    return node[2];
+  return val_op(m, VAL_OP, OP_CTOR, commit, 0, node, 3u);
+}
+
+/* sign l msg = signAt skSeed skPrf pk i msg, with the data of the leaf
+   value l (Q-S5-5 (b)). No domain signAt: the stuck operation. */
+static const Value *reduce_sign(Machine *m, const Value *const *a, uint32_t n) {
+  uint32_t d = def_index(m, "signAt");
+  const Value *l = a[0];
+  const Value *f;
+  const Value *out;
+  uint32_t i;
+  for (i = 0; i < n; i++)
+    if (a[i]->kind == VAL_TRAP)
+      return a[i];
+  if (blocked(m, l, OP_SIGN, 0, 0, a, n, &out))
+    return out;
+  if (!val_is(l, OP_LEAF_VAL) || l->argc != 4u)
+    return internal(m, "a keystore operation on a value of the wrong form");
+  if (d == UINT32_MAX)
+    return val_op(m, VAL_STUCK, OP_SIGN, 0, 0, a, n);
+  f = def_value(m, d);
+  for (i = 0; i < 4u; i++)
+    f = apply_value(m, f, l->args[i]);
+  return apply_value(m, f, a[1]);
+}
+
+/* leafHeight l: the height of the public key of the leaf value l. A
+   neutral leaf or a neutral key spine gives the stuck operation. */
+static const Value *reduce_leaf_height(Machine *m, const Value *const *a, uint32_t n) {
+  const Value *out;
+  uint64_t h = 0;
+  if (!key_height(m, a[0], OP_LEAF_VAL, OP_LEAF_HEIGHT, a, n, &h, &out))
+    return out;
+  return val_nat(m, h);
+}
+
 static const Value *reduce_op(Machine *m, Op op, uint32_t inst, uint32_t field, const Value *const *a, uint32_t n) {
   if (!arity_ok(m, op, inst, n))
     return internal(m, "an operation with the wrong number of arguments");
@@ -2432,6 +2665,8 @@ static const Value *reduce_op(Machine *m, Op op, uint32_t inst, uint32_t field, 
   case OP_SOME:
   case OP_PACK:
   case OP_CTOR:
+  case OP_KEYSTORE_VAL:
+  case OP_LEAF_VAL:
   case OP_SSET:
   case OP_I:
   case OP_I0:
@@ -2508,6 +2743,18 @@ static const Value *reduce_op(Machine *m, Op op, uint32_t inst, uint32_t field, 
   case OP_TH_MSG:
   case OP_PRF:
     return reduce_hash(m, op, a, n);
+  case OP_KEYGEN:
+    return reduce_keygen(m, a, n);
+  case OP_PUBLIC_KEY:
+    return reduce_public_key(m, a, n);
+  case OP_NEXT:
+    return reduce_next(m, a, n);
+  case OP_AND_THEN:
+    return reduce_and_then(m, a, n);
+  case OP_SIGN:
+    return reduce_sign(m, a, n);
+  case OP_LEAF_HEIGHT:
+    return reduce_leaf_height(m, a, n);
   case OP_FLAG_IF:
     return reduce_flag_if(m, a, n);
   case OP_BOOL_ELIM:
@@ -2962,7 +3209,8 @@ static void print_binder(Printer *p, const Value *v) {
 static int special_form(const Value *v) {
   return interval_form(v) || (v != NULL && (v->kind == VAL_OP || v->kind == VAL_STUCK)
       && (v->op == OP_PLAM || v->op == OP_PAPP || v->op == OP_SYSTEM || v->op == OP_GLUE
-          || v->op == OP_GLUE_ELEM || v->op == OP_UNGLUE || v->op == OP_HCOMP));
+          || v->op == OP_GLUE_ELEM || v->op == OP_UNGLUE || v->op == OP_HCOMP
+          || v->op == OP_KEYSTORE_VAL || v->op == OP_LEAF_VAL));
 }
 
 /* 1 when the operand X of OP (on the LEFT or the right) needs parentheses:
@@ -2973,9 +3221,28 @@ static int interval_paren(const Value *x, Op op, int left) {
   return x->op == OP_IMAX ? op == OP_IMIN || left : op == OP_IMIN && left;
 }
 
+/* A keystore or a leaf value prints as keystore h i or leaf h i: no seed
+   and no public key (Q-S5-14 (a)). A key spine with no height prints _. */
+static void print_key(Printer *p, const Value *v) {
+  uint32_t steps;
+  const Value *h = pk_end(v->args[2], &steps);
+  put(p, op_name(p->m, v->op, v->inst, v->field));
+  put(p, " ");
+  if (steps == 4u)
+    print_value(p, h, 1);
+  else
+    put(p, "_");
+  put(p, " ");
+  print_value(p, v->args[3], 1);
+}
+
 static void print_special(Printer *p, const Value *v) {
   const Value *head = v->args[0];
   int bare = head->kind == VAL_APP || head->kind == VAL_VAR || (head->kind == VAL_STUCK && head->op == OP_PAPP);
+  if (v->op == OP_KEYSTORE_VAL || v->op == OP_LEAF_VAL) {
+    print_key(p, v);
+    return;
+  }
   if (v->op == OP_GLUE || v->op == OP_GLUE_ELEM || v->op == OP_UNGLUE || v->op == OP_HCOMP) {
     uint32_t start = v->op == OP_GLUE ? 0u : v->op == OP_GLUE_ELEM ? 1u : v->op == OP_HCOMP ? 2u : 3u;
     put(p, op_name(p->m, v->op, v->inst, v->field));

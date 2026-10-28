@@ -87,6 +87,7 @@ build/langc ir PROG
 build/langc abi PROG
 build/langc build PROG -o OUT [--runtime]
 build/langc fmt PROG
+build/langc signer --height H -o OUT
 ```
 
 - `check` prints `ok`, or refuses the program. `check --json` gives the

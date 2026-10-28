@@ -1,0 +1,24 @@
+-- Hash validation is a flag on the digest, so dropping it does not trap.
+seed : Digest
+seed = digest 1 2 3 4
+
+wide : ℕ → Tweak
+wide n = pack 0 (pack 0 (pack (natAdd n 4294967296) (pack 0 (pack 0 0))))
+
+flagged : ℕ → Tweak
+flagged n = pack 0 (pack 0 (pack (natAdd n 18446744073709551615) (pack 0 (pack 0 0))))
+
+initial : Digest × ℕ
+initial = pack seed 0
+
+stepWide : ℕ → Digest × ℕ → Digest × ℕ
+stepWide n st = pack (thChain seed (wide n) seed) (natAdd (payload st) 1)
+
+stepFlag : ℕ → Digest × ℕ → Digest × ℕ
+stepFlag n st = pack (prf seed (flagged n)) (natAdd (payload st) 1)
+
+counterWide : ℕ → ℕ
+counterWide n = payload (fold (stepWide n) initial n)
+
+counterFlag : ℕ → ℕ
+counterFlag n = payload (fold (stepFlag n) initial n)

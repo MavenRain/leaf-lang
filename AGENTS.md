@@ -23,6 +23,8 @@ them as built.
   entry names.
 - `build/langc build PROG -o OUT [--runtime]`: write the Wasm module.
 - `build/langc fmt PROG`: print the canonical text (`SPEC.md` section 2.6).
+- `build/langc signer --height H -o OUT`: write the Wasm signer module for
+  the height H, 0 to 20 (`docs/PLAN.md` section 5.2).
 
 A definition is a signature line and a clause line (`SPEC.md` section 2.1):
 

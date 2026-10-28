@@ -3,7 +3,7 @@
 base : ℕ
 base = 7
 
-next : ℕ
-next = natAdd base 1
+addOne : ℕ
+addOne = natAdd base 1
 
 -- A trailing comment stays at the end.

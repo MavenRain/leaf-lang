@@ -1,0 +1,33 @@
+-- The Keccak known answers (S5 U5c, Q-S5-30 (b)). Each entry compares a
+-- hash with the digest that `langc eval` gives for it at n = 0 (keccak.c).
+-- So each entry gives 1 at n = 0, and the Keccak output decides the result.
+-- The tree field is 2^32 + 2, so the input has the tree split of the ADRS.
+tw : (n : ℕ) → Tweak
+tw n = pack 1 (pack 4294967298 (pack 3 (pack 4 (pack 5 n))))
+
+word : (n : ℕ) → Digest
+word n = digest 7 n 4294967298 9
+
+hc : (n : ℕ) → Digest
+hc n = thChain (word n) (tw 6) (word 2)
+
+hn : (n : ℕ) → Digest
+hn n = thNode (word 1) (tw n) (word 2) (word 3)
+
+hm : (n : ℕ) → Digest
+hm n = thMsg (word 1) (word 2) n (word 3)
+
+hp : (n : ℕ) → Digest
+hp n = prf (word n) (tw 2)
+
+kc : (n : ℕ) → Bool
+kc n = digestEq (hc n) (digest 10841697325726417011 12018227275557107676 7112729075257653824 2666870718083645452)
+
+kn : (n : ℕ) → Bool
+kn n = digestEq (hn n) (digest 3855552025191482400 7670775524772769567 7722324409301196881 3940699508199491170)
+
+km : (n : ℕ) → Bool
+km n = digestEq (hm n) (digest 8604116244862566516 13414433300231044209 2300902164613094141 12794071709348636569)
+
+kp : (n : ℕ) → Bool
+kp n = digestEq (hp n) (digest 895674848020266426 2447993724360363466 3040324797182998743 4688408035301652033)

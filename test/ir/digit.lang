@@ -1,0 +1,18 @@
+-- The digit op (S5 U4d). natDiv, natMod and digit on a neutral Nat lower to
+-- the div, mod, shr and and ops. A divisor that is not a nonzero constant
+-- gets a guard, so y = 0 traps and the Wasm op never sees 0. A digit
+-- position past the digest traps, and no load reads past word 3.
+divBy : (n : ℕ) → ℕ
+divBy n = natDiv 100 n
+
+modSeven : (n : ℕ) → ℕ
+modSeven n = natMod n 7
+
+digitAt : (n : ℕ) → ℕ
+digitAt n = digit logW4 (digest n 1 2 3) 5
+
+digitOf : (n : ℕ) → ℕ
+digitOf n = digit logW4 (digest 81985529216486895 2 3 4) n
+
+digitPast : (n : ℕ) → ℕ
+digitPast n = digit logW8 (digest n 0 0 0) 32
