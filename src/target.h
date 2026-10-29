@@ -29,4 +29,13 @@ int target_write(const IrProgram *prog, TargetPart part, FILE *out, FILE *err);
    has it. Returns 1, or 0 after a message on ERR. */
 int target_write_signer(unsigned height, FILE *out, FILE *err);
 
+/* The three builds of the EVM verifier (D16, D17): the real entry 1
+   (EIP-8141), the shim (D7) and entry 2 (ERC-4337 v0.7). */
+typedef enum { VERIFIER_REAL, VERIFIER_SHIM, VERIFIER_4337 } VerifierMode;
+
+/* Writes the runtime hex of the EVM verifier (src/evm.c, D1 to D4) for
+   HEIGHT and the 72 bytes PK of a pk FILE (D13), in the build MODE (D16).
+   Returns 1, or 0 after a message on ERR. */
+int target_write_verifier(unsigned height, const unsigned char pk[72], VerifierMode mode, FILE *out, FILE *err);
+
 #endif

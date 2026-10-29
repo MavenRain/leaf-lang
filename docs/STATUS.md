@@ -468,3 +468,155 @@ and is M1 of U7). U7 mutated the signer.
 - A restored backup is outside the checker (O12). The harness refuses
   only a position that is not larger than DIR/ID.state.
 - S6 adds the EVM verifier (PLAN section 5.1).
+
+## S6: EVM account verifier
+
+S6 adds the EVM account verifier of PLAN section 5.1. The verifier is
+fixed EVM code that C writes, with no IR (Q-S6-1 (a)). The public key
+(the root, the public seed and H) is in the code as constants.
+
+- `langc verifier --height H --pk FILE [--entry 8141|4337] [--shim]
+  -o OUT` writes the verifier code for one public key. A bad argument
+  is a `USAGE` refusal. S6 adds no diagnostic code.
+- src/evm.c has the core and the three builds. The core checks one
+  signature by PLAN 5.4 (thMsg, the 64 + 3 WOTS+ digits, the 67
+  chains, the L-tree, the auth path) against the key constants. Each
+  fault goes to one shared block.
+- The three builds differ only in the 6 parts of one table and the
+  entry 2 head:
+  - Entry 1 (EIP-8141, `--entry 8141`): the signature comes from
+    entry 0 of the transaction signatures, the nonce and sigHash come
+    from TXPARAM. It accepts by APPROVE. The opcodes are a draft (O1).
+  - The shim (`--entry 8141 --shim`, O2): the entry 1 core. It reads
+    the nonce and sigHash from a 64-byte calldata prefix, then the
+    signature. It returns the word 1. A fault reverts.
+  - Entry 2 (ERC-4337 v0.7 `validateUserOp`, `--entry 4337`): it
+    reads the signature and the nonce from the calldata after its
+    head. userOpHash is sigHash. It pays missingAccountFunds and
+    returns the word 0. A fault gives the word 1 (Q-S6-3 (a)).
+- src/asm.c and src/asm.h: the EVM assembler that src/evm.c uses.
+- L2 in the guest: the domain def `accept pk k m s` and its eval rows
+  (test/eval/laws.lang, test/eval/expect.txt).
+- test/gas.sh and `make gas`: the gas rows (below).
+
+### Gate rows (`make check`)
+
+test/gate.sh has the S6 rows. Each row runs `evm run` on the code of
+`langc verifier` at h = 4, with signatures from the Wasm signer
+(test/run-wasm.mjs). The full list is in test/gate.sh.
+
+- The shim and entry 2 accept the signatures of the 16 positions (32
+  rows). call-ok, call-u-ok and call-u-funds accept.
+- A wrong nonce (call-nonce, call-u-nonce, call-u-key), a wrong
+  message (call-m, call-u-m), a wrong root (2 rows) and a changed
+  byte (6 rows) are refused.
+- The calldata length and offset rows: call-f-len, call-g-len,
+  call-g-off.
+- The staged review adds test/verifier-review.c: nine C integration
+  checks with a real signature whose last byte is zero. They cover a
+  complete signature, omitted ABI padding, a missing signature byte,
+  a short tuple, overflowing and out-of-range offsets, and valid
+  relocated signature and tuple tails. The truncated signature used to
+  return 0 because CALLDATACOPY supplied the missing zero. Entry 2 now
+  checks tuple and signature spans without arithmetic overflow and
+  returns 1 for that input. The extra signer fixture makes 95 signer
+  rows; the nine ABI checks report separately.
+- The shim build is the real entry 1 build with the 5 table parts in
+  the shim form (a byte compare). evm 1.14.12 cannot run the real
+  build (O2).
+- `--entry 4337 --shim` is refused.
+
+### Mutants
+
+There are 8 mutants on src/evm.c. 8 are killed. Each mutant is an
+exact-match edit, then `make -B`, then `make check`. Each mutant
+changes the bytes of the h = 4 shim, real entry 1 and entry 2 builds
+(key: entry 2 only).
+
+| Mutant | Edit | Killer (FAIL rows) |
+|---|---|---|
+| nonce | the nonce EQ is POP POP PUSH 1 | 3: call-nonce, call-u-nonce, call-u-key |
+| csum | the checksum constant 960 is 945 | 35: the 32 position rows, call-ok, call-u-ok, call-u-funds |
+| chainend | the chain end 15 GT is 14 GT | 35: the same rows |
+| oddnode | the odd-node JUMPI is POP, JUMP (the even order) | 35: the same rows |
+| authbit | the auth bit o is 0 | 30: positions 1 to 15 on both builds |
+| root | the root EQ ISZERO is POP POP PUSH 0 (the JUMPI stays) | 10: call-m, call-u-m, the 2 wrong-root rows, the 6 changed-byte rows |
+| len | the length compare is POP | 1: call-g-len |
+| key | the entry 2 nonce word is SHL 192 SHR 192 | 1: call-u-key |
+
+Position 0 has an even q at each level, so the authbit mutant accepts
+it. With no length check, call-f-len and call-g-off also fail: the
+zeros of CALLDATACOPY and CALLDATALOAD make the root compare fail.
+
+### Open items from S6
+
+- The real entry 1 has no `evm run` row and no gas row: evm 1.14.12
+  has no EIP-8141 opcodes (O2, O21). The shim and the byte compare
+  check the entry 1 core.
+- The EIP-8141 opcodes and the signature hash are a draft (O1).
+- The execution gas is approximately 1.7 times the PLAN 5.1 estimate
+  (O22).
+- At each height, the EIP-7623 floor is less than standard +
+  execution (O10).
+- `make check` does not run `make gas` (Q-S6-8 (b)). At H = 16 the
+  gas run takes about 17 minutes and 62 MB.
+- Out of S6: an `execute` entry for the ERC-4337 account (O23), the
+  EIP-8141 SENDER frame (O24), deployment (O25).
+- S7 adds the Poseidon2 binding and the zkml writer (PLAN section 9).
+
+### Gas rows (`make gas`)
+
+`make gas` runs test/gas.sh. GAS_H sets the heights (default 4 10 16).
+`make check` does not run it (Q-S6-8 (b)). For each height H, the
+script makes one key and runs the Wasm signer to 16 positions. At H =
+4, these are all 16 positions. At a larger H, position i is
+i(2^H - 1)/15, for i = 0 to 15 (D19.2). At each position, `langc
+verifier` writes the shim and entry 2, and `evm run --statdump` runs
+them on the signature. Each signature must accept. If not, the script
+writes a FAIL row and exits 1.
+
+The calldata gas comes from the input bytes (D19.3, EIP-7623), with z
+zero bytes and nz other bytes: standard is 4 z + 16 nz, floor is
+10 (z + 4 nz), and tx is 21000 + max(standard + execution, floor).
+
+The real entry 1 build has no row (D19.4). evm 1.14.12 has no TXPARAM,
+SIGPARAM, SIGDATACOPY or APPROVE (O2). The shim is the entry 1 core,
+with the 5 table parts in the shim form. In the real entry 1, the
+signature is in the transaction signatures list, not in calldata. Its
+calldata gas is a draft only (O1).
+
+Each cell is min/mean/max over the 16 positions. This table records the
+original S6 measurements before the staged review added calldata bounds
+checks. Review reruns at H = 4 and H = 10 add 160 gas to entry 2 execution
+and tx at every position, so entry 2 is now the shim + 288 gas at those
+heights. Bytes, calldata gas and shim results are unchanged. The H = 16
+keygen has not been rerun after the bounds fix.
+
+| H | Build | Bytes | Execution | Standard | Floor | Tx |
+|---|---|---|---|---|---|---|
+| 4 | shim | 2376 | 80823/90970.5/101118 | 37368/37440/37500 | 93420/93600/93750 | 139263/149410.5/159582 |
+| 4 | entry 2 | 2852 | 80951/91098.5/101246 | 39452/39524/39584 | 98630/98810/98960 | 141475/151622.5/161794 |
+| 10 | shim | 2568 | 85897/95237.3/106192 | 40452/40533.8/40596 | 101130/101334.4/101490 | 147373/156771.1/167704 |
+| 10 | entry 2 | 3044 | 86025/95365.3/106320 | 42536/42617.8/42680 | 106340/106544.4/106700 | 149585/158983.1/169916 |
+| 16 | shim | 2760 | 87281/96044.8/111266 | 43512/43600.5/43656 | 108780/109001.2/109140 | 151889/160645.2/175778 |
+| 16 | entry 2 | 3236 | 87409/96172.8/111394 | 45596/45684.5/45740 | 113990/114211.2/114350 | 154101/162857.2/177990 |
+
+In these original rows, entry 2 is the shim + 128 gas (min, mean and max) and 476
+bytes more. In each row, standard + execution is more than the floor.
+Because of this, tx = 21000 + standard + execution. The execution mean
+is 90970.5 at H = 4, 95237.3 at H = 10 and 96044.8 at H = 16. Each H has
+its own 16 positions and signed digests. The WOTS+ chain steps change with
+the digest, so the mean is not linear in H.
+
+The PLAN 5.1 plan is for h = 16. The measured column is the H = 16 shim
+mean:
+
+| Part | Plan | Measured |
+|---|---|---|
+| execution (WOTS+ chains, L-tree, auth path, H_msg) | about 55k | 96044.8 |
+| calldata, 2760 bytes | about 43k | standard 43600.5, floor 109001.2 |
+| total past the base cost | about 100k | standard + execution 139645.3 |
+
+The floor (109001.2) is less than standard + execution (139645.3), so
+tx does not use the floor (O10). The measured execution gas is
+approximately 1.7 times the plan estimate (about 55k).

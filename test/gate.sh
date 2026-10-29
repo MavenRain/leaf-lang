@@ -317,6 +317,154 @@ signer_run 4 "$tmp/k4s" 0 "4096 8 sigSum $sum7 verify $(sign_bool bad)" "keygen 
 for p in 0 511 1023; do
   signer_last 10 "$tmp/k10" "verify true" "keygen 3 $seeds $p" next "sign $((p + 1)) $msg" "verify $msg"
 done
+# The EVM verifier in shim mode (S6 D13): the shim line writes the pk FILE and
+# the shim input of the signature at position 0, `langc verifier --shim`
+# builds the h = 4 runtime of that pk, and `evm run` returns the word 1. A
+# wrong nonce and a wrong M revert. The userop lines write the entry 2 inputs
+# (S6 D17) of the same signature: the nonce 0, 1 and 2^64, M and M2, and the
+# missingAccountFunds 0 and 7.
+signer_run 4 "$tmp/k4s" 0 "4096 1 sigSum $sum0 shim 2376 shim 2376 shim 2376 userop 2852 userop 2852 userop 2852 userop 2852 userop 2852" \
+  "keygen 8 $seeds 0" next "sign 1 $msg" \
+  "shim 0 $msg $tmp/pk4.bin $tmp/call-ok.hex" "shim 1 $msg $tmp/pk4.bin $tmp/call-nonce.hex" "shim 0 $msg2 $tmp/pk4.bin $tmp/call-m.hex" \
+  "userop 0 $msg 0 $tmp/pk4.bin $tmp/call-u-ok.hex" "userop 0 $msg 7 $tmp/pk4.bin $tmp/call-u-funds.hex" \
+  "userop 1 $msg 0 $tmp/pk4.bin $tmp/call-u-nonce.hex" "userop 18446744073709551616 $msg 0 $tmp/pk4.bin $tmp/call-u-key.hex" \
+  "userop 0 $msg2 0 $tmp/pk4.bin $tmp/call-u-m.hex"
+signer_rows=$((signer_rows + 1))
+build/langc verifier --height 4 --pk "$tmp/pk4.bin" --shim -o "$tmp/rt4.hex" 2>"$tmp/w.err" ||
+  { echo "FAIL verifier h = 4: $(head -n 1 "$tmp/w.err")"; fail=$((fail + 1)); }
+# shim_run CALL WANT: `evm run` of the h = 4 runtime on the input file CALL
+# prints the last line WANT.
+shim_run() {
+  signer_rows=$((signer_rows + 1))
+  got=$(evm run --codefile "$tmp/rt4.hex" --inputfile "$1" 2>&1 | tail -n 1)
+  [ "$got" = "$2" ] || { echo "FAIL shim $1: want '$2', got '$got'"; fail=$((fail + 1)); }
+}
+shim_run "$tmp/call-ok.hex" "0x$(printf '%063d' 0)1"
+shim_run "$tmp/call-nonce.hex" " error: execution reverted"
+shim_run "$tmp/call-m.hex" " error: execution reverted"
+# The real build (S6 D16.5): `langc verifier` with no --shim builds the same
+# pk at h = 4. Each of the 5 table parts in the real form (the sig length
+# 2312 is 0x0908) is in it once, and with the shim form in their place it
+# is the shim build: the same length and the same bytes.
+build/langc verifier --height 4 --pk "$tmp/pk4.bin" -o "$tmp/real4.hex" 2>"$tmp/w.err" ||
+  { echo "FAIL verifier real h = 4: $(head -n 1 "$tmp/w.err")"; fail=$((fail + 1)); }
+real_hex=$(cat "$tmp/real4.hex")
+shim_hex=$(cat "$tmp/rt4.hex")
+# real_part REAL SHIM: REAL is in the real build once; it becomes SHIM.
+real_part() {
+  signer_rows=$((signer_rows + 1))
+  after=${real_hex#*"$1"}
+  { [ "$after" != "$real_hex" ] && [ "${after#*"$1"}" = "$after" ]; } ||
+    { echo "FAIL real part $1: want it once"; fail=$((fail + 1)); return; }
+  real_hex="${real_hex%%"$1"*}$2$after"
+}
+real_part 60035fb4 60403603
+real_part 5f6109085f610c00b5 6109086040610c0037
+real_part 6001b0 5b5f35
+real_part 6008b0 602035
+real_part 600360205faa 5b5b60205ff3
+signer_rows=$((signer_rows + 1))
+[ "$real_hex" = "$shim_hex" ] || { echo "FAIL real h = 4: not the shim build with the 5 parts"; fail=$((fail + 1)); }
+# Entry 2 (S6 D17, ERC-4337 v0.7): `langc verifier --entry 4337` builds the
+# h = 4 runtime of the same pk. From the v0.7 EntryPoint, the signature at
+# position 0 returns the word 0 (also with missingAccountFunds 7: the CALL
+# fails, no balance). A wrong nonce sequence, the nonce key 1 and a wrong
+# userOpHash return the word 1 (Q-S6-3 (a)). Another caller and a wrong
+# selector revert. --entry 4337 refuses --shim.
+build/langc verifier --height 4 --pk "$tmp/pk4.bin" --entry 4337 -o "$tmp/e2-4.hex" 2>"$tmp/w.err" ||
+  { echo "FAIL verifier entry 2 h = 4: $(head -n 1 "$tmp/w.err")"; fail=$((fail + 1)); }
+entry_point=0x0000000071727de22e5e9d8baf0edac6f37da032
+# entry2_run CALL SENDER WANT: `evm run` of the entry 2 runtime on the input
+# file CALL from SENDER prints the last line WANT.
+entry2_run() {
+  signer_rows=$((signer_rows + 1))
+  got=$(evm run --codefile "$tmp/e2-4.hex" --inputfile "$1" --sender "$2" 2>&1 | tail -n 1)
+  [ "$got" = "$3" ] || { echo "FAIL entry 2 $1: want '$3', got '$got'"; fail=$((fail + 1)); }
+}
+word0="0x$(printf '%064d' 0)"
+word1="0x$(printf '%063d' 0)1"
+entry2_run "$tmp/call-u-ok.hex" $entry_point "$word0"
+entry2_run "$tmp/call-u-funds.hex" $entry_point "$word0"
+entry2_run "$tmp/call-u-nonce.hex" $entry_point "$word1"
+entry2_run "$tmp/call-u-key.hex" $entry_point "$word1"
+entry2_run "$tmp/call-u-m.hex" $entry_point "$word1"
+entry2_run "$tmp/call-u-ok.hex" 0x00000000000000000000000000000000000000aa " error: execution reverted"
+{ printf 19822f7d; cut -c 9- "$tmp/call-u-ok.hex"; } >"$tmp/call-u-sel.hex"
+entry2_run "$tmp/call-u-sel.hex" $entry_point " error: execution reverted"
+signer_rows=$((signer_rows + 1))
+! build/langc verifier --height 4 --pk "$tmp/pk4.bin" --entry 4337 --shim -o "$tmp/no.hex" 2>/dev/null ||
+  { echo "FAIL verifier: --entry 4337 took --shim"; fail=$((fail + 1)); }
+# The D10 rows (S6 U6) at h = 4. Each position 0 to 15 accepts: keygen 9
+# writes the pk of keygen 8 again, signs the 16 positions, and the shim line
+# and the userop line of each go to the two builds of that pk. The wrong
+# nonce rows are above (call-nonce and call-u-nonce).
+set -- "keygen 9 $seeds 0"
+for p in $(seq 0 15); do
+  set -- "$@" next "sign $((p + 1)) $msg" "shim $p $msg $tmp/pk4p.bin $tmp/call-p$p.hex" "userop $p $msg 0 $tmp/pk4p.bin $tmp/call-q$p.hex"
+done
+signer_last 4 "$tmp/k4s" "userop 2852" "$@"
+signer_rows=$((signer_rows + 1))
+cmp -s "$tmp/pk4.bin" "$tmp/pk4p.bin" || { echo "FAIL keygen 9: not the pk of keygen 8"; fail=$((fail + 1)); }
+for p in $(seq 0 15); do
+  shim_run "$tmp/call-p$p.hex" "$word1"
+  entry2_run "$tmp/call-q$p.hex" $entry_point "$word0"
+done
+# A wrong root: the two builds of the pk with byte 0 (the root) changed. The
+# signature at position 0 reverts (the shim) and returns the word 1 (entry 2).
+b0=$(od -An -tu1 -N1 "$tmp/pk4.bin" | tr -d ' ')
+{ printf "\\$(printf '%03o' $((b0 % 2 ? b0 - 1 : b0 + 1)))"; tail -c +2 "$tmp/pk4.bin"; } >"$tmp/pk4r.bin"
+signer_rows=$((signer_rows + 1))
+{ ! cmp -s "$tmp/pk4.bin" "$tmp/pk4r.bin" &&
+  build/langc verifier --height 4 --pk "$tmp/pk4r.bin" --shim -o "$tmp/rt4r.hex" 2>"$tmp/w.err" &&
+  build/langc verifier --height 4 --pk "$tmp/pk4r.bin" --entry 4337 -o "$tmp/e2r.hex" 2>"$tmp/w.err"; } ||
+  { echo "FAIL verifier root h = 4: $(head -n 1 "$tmp/w.err")"; fail=$((fail + 1)); }
+# code_run CODE CALL WANT: `evm run` of the runtime CODE on the input file
+# CALL from the v0.7 EntryPoint prints the last line WANT.
+code_run() {
+  signer_rows=$((signer_rows + 1))
+  got=$(evm run --codefile "$1" --inputfile "$2" --sender $entry_point 2>&1 | tail -n 1)
+  [ "$got" = "$3" ] || { echo "FAIL evm $1 $2: want '$3', got '$got'"; fail=$((fail + 1)); }
+}
+code_run "$tmp/rt4r.hex" "$tmp/call-ok.hex" " error: execution reverted"
+code_run "$tmp/e2r.hex" "$tmp/call-u-ok.hex" "$word1"
+# The userop input of test/run-wasm.mjs: the tuple at t = 96, the signature
+# offset word at byte 356 (hex digit 713) holds s = 384, the length word is
+# at byte 484 and the sig at byte 516 (hex digit 1033). The shim input has
+# the sig at hex digit 129.
+signer_rows=$((signer_rows + 1))
+sig_at=$(awk -v s="$(cut -c 129- "$tmp/call-ok.hex")" '{ print index($0, s) }' "$tmp/call-u-ok.hex")
+[ "$sig_at" = 1033 ] || { echo "FAIL userop layout: the sig at hex digit '$sig_at', want 1033"; fail=$((fail + 1)); }
+# hex_flip IN OUT N: the hex file IN with the hex digit N (from 1) changed
+# goes to OUT.
+hex_flip() {
+  awk -v n="$3" '{ h = "0123456789abcdef"; d = index(h, substr($0, n, 1)) - 1; d = d % 2 ? d - 1 : d + 1; printf "%s", substr($0, 1, n - 1) substr(h, d + 1, 1) substr($0, n + 1) }' "$1" >"$2"
+}
+# One changed byte in r (sig byte 8), in the chain node 0 (sig byte 40) and
+# in the auth node 0 (sig byte 2184) fails: the shim reverts, entry 2
+# returns the word 1.
+for at in 16 80 4368; do
+  hex_flip "$tmp/call-ok.hex" "$tmp/call-f$at.hex" $((129 + at))
+  shim_run "$tmp/call-f$at.hex" " error: execution reverted"
+  hex_flip "$tmp/call-u-ok.hex" "$tmp/call-g$at.hex" $((1033 + at))
+  entry2_run "$tmp/call-g$at.hex" $entry_point "$word1"
+done
+# A wrong length: the shim input one byte short reverts. Entry 2 returns the
+# word 1 (Q-S6-6 (a)) for the length word 0x909 and for the signature offset
+# word out of range (2^252 + 384: the length word reads as zero).
+awk '{ printf "%s", substr($0, 1, length($0) - 2) }' "$tmp/call-ok.hex" >"$tmp/call-f-len.hex"
+shim_run "$tmp/call-f-len.hex" " error: execution reverted"
+hex_flip "$tmp/call-u-ok.hex" "$tmp/call-g-len.hex" 1032
+entry2_run "$tmp/call-g-len.hex" $entry_point "$word1"
+hex_flip "$tmp/call-u-ok.hex" "$tmp/call-g-off.hex" 713
+entry2_run "$tmp/call-g-off.hex" $entry_point "$word1"
+# A real signature whose final byte is zero distinguishes a truncated
+# payload from CALLDATACOPY's zero padding. The C checks also exercise
+# offset overflow and valid relocated tuple and signature tails.
+zero_tail_seed=00000000000000000000000000000000000000000000000000000000000002c0
+set -- $seeds
+signer_last 4 "$tmp/k4s" "userop 2852" "keygen 10 $1 $2 $zero_tail_seed 0" next "sign 1 $msg" \
+  "userop 0 $msg 0 $tmp/pk-zero-tail.bin $tmp/call-zero-tail.hex"
+build/verifier-review "$tmp/pk-zero-tail.bin" "$tmp/call-zero-tail.hex" "$tmp" || fail=$((fail + 1))
 echo "signer: $signers modules valid, $signer_rows rows"
 build/langc signer --height 1 -o "$tmp/signer-review.wasm"
 node test/signer-review.mjs "$tmp/signer-review.wasm"

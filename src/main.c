@@ -19,7 +19,8 @@ typedef enum {
   CMD_ABI,
   CMD_BUILD,
   CMD_FMT,
-  CMD_SIGNER
+  CMD_SIGNER,
+  CMD_VERIFIER
 } Command;
 
 typedef struct {
@@ -32,6 +33,9 @@ typedef struct {
   int runtime;
   int json;
   unsigned height;
+  const char *pk_path;
+  int shim;
+  int entry2;
 } Options;
 
 static const struct {
@@ -45,6 +49,7 @@ static const struct {
   {"build", CMD_BUILD},
   {"fmt", CMD_FMT},
   {"signer", CMD_SIGNER},
+  {"verifier", CMD_VERIFIER},
 };
 
 static int usage(FILE *err) {
@@ -54,7 +59,8 @@ static int usage(FILE *err) {
         "       langc abi PROG\n"
         "       langc build PROG -o OUT [--runtime]\n"
         "       langc fmt PROG\n"
-        "       langc signer --height H -o OUT\n", err);
+        "       langc signer --height H -o OUT\n"
+        "       langc verifier --height H --pk FILE [--entry 8141|4337] [--shim] -o OUT\n", err);
   return 2;
 }
 
@@ -107,6 +113,41 @@ static int parse_signer_options(int argc, char **argv, Options *opt, Diag *diag)
   return opt->out_path != NULL && has_height ? 1 : diag_fail(diag, "USAGE", NULL, "signer needs --height H -o OUT");
 }
 
+/* D13, D16, D17: --entry 8141 (the default) with no --shim writes the real
+   entry 1 (EIP-8141), with --shim the shim (D7); --entry 4337 writes entry 2
+   (ERC-4337 v0.7). */
+static int parse_verifier_options(int argc, char **argv, Options *opt, Diag *diag) {
+  int has_height = 0;
+  opt->prog_path = NULL;
+  for (int i = 2; i < argc; i++) {
+    int is_shim = strcmp(argv[i], "--shim") == 0;
+    int is_out = strcmp(argv[i], "-o") == 0 && i + 1 < argc;
+    int is_height = strcmp(argv[i], "--height") == 0 && i + 1 < argc;
+    int is_pk = strcmp(argv[i], "--pk") == 0 && i + 1 < argc;
+    int is_entry = strcmp(argv[i], "--entry") == 0 && i + 1 < argc;
+    if (!is_shim && !is_out && !is_height && !is_pk && !is_entry) {
+      return diag_fail(diag, "USAGE", NULL, "unknown verifier argument '%s'", argv[i]);
+    }
+    if (is_height && !parse_height(argv[i + 1], &opt->height)) {
+      return diag_fail(diag, "USAGE", NULL, "the verifier height '%s' is not 0 to %u", argv[i + 1],
+                       TARGET_SIGNER_HEIGHT_MAX);
+    }
+    if (is_entry && strcmp(argv[i + 1], "8141") != 0 && strcmp(argv[i + 1], "4337") != 0) {
+      return diag_fail(diag, "USAGE", NULL, "the verifier entry '%s' is not 8141 or 4337", argv[i + 1]);
+    }
+    opt->entry2 = is_entry ? strcmp(argv[i + 1], "4337") == 0 : opt->entry2;
+    opt->out_path = is_out ? argv[i + 1] : opt->out_path;
+    opt->pk_path = is_pk ? argv[i + 1] : opt->pk_path;
+    opt->shim |= is_shim;
+    has_height |= is_height;
+    i += !is_shim;
+  }
+  if (opt->shim && opt->entry2) return diag_fail(diag, "USAGE", NULL, "verifier --shim needs --entry 8141");
+  return opt->out_path != NULL && opt->pk_path != NULL && has_height
+             ? 1
+             : diag_fail(diag, "USAGE", NULL, "verifier needs --height H --pk FILE [--entry 8141|4337] [--shim] -o OUT");
+}
+
 static int parse_options(int argc, char **argv, Options *opt, Diag *diag) {
   memset(opt, 0, sizeof *opt);
   if (argc < 3 || !find_command(argv[1], &opt->command)) {
@@ -131,6 +172,8 @@ static int parse_options(int argc, char **argv, Options *opt, Diag *diag) {
       return parse_build_options(argc, argv, opt, diag);
     case CMD_SIGNER:
       return parse_signer_options(argc, argv, opt, diag);
+    case CMD_VERIFIER:
+      return parse_verifier_options(argc, argv, opt, diag);
   }
   return 0;
 }
@@ -168,6 +211,7 @@ static int run_target(const Options *opt, Machine *machine, Diag *diag) {
     case CMD_EVAL:
     case CMD_BUILD:
     case CMD_FMT:
+    case CMD_VERIFIER:
     case CMD_SIGNER:
       break;
   }
@@ -182,6 +226,22 @@ static int run_signer(const Options *opt, Diag *diag) {
   FILE *out = fopen(opt->out_path, "wb");
   if (out == NULL) return diag_fail(diag, "IO", NULL, "cannot write '%s'", opt->out_path) + 1;
   int ok = target_write_signer(opt->height, out, stderr);
+  return fclose(out) == 0 && ok ? 0 : 1;
+}
+
+/* D13: the pk FILE is the 72 bytes of a Wasm signer publicKey block. */
+static int run_verifier(const Options *opt, Diag *diag) {
+  unsigned char pk[73];
+  FILE *in = fopen(opt->pk_path, "rb");
+  if (in == NULL) return diag_fail(diag, "IO", NULL, "cannot read '%s'", opt->pk_path) + 1;
+  size_t got = fread(pk, 1, sizeof pk, in);
+  if (fclose(in) != 0 || got != 72) {
+    return diag_fail(diag, "IO", NULL, "the pk file '%s' is not 72 bytes", opt->pk_path) + 1;
+  }
+  FILE *out = fopen(opt->out_path, "wb");
+  if (out == NULL) return diag_fail(diag, "IO", NULL, "cannot write '%s'", opt->out_path) + 1;
+  VerifierMode entry1 = opt->shim ? VERIFIER_SHIM : VERIFIER_REAL;
+  int ok = target_write_verifier(opt->height, pk, opt->entry2 ? VERIFIER_4337 : entry1, out, stderr);
   return fclose(out) == 0 && ok ? 0 : 1;
 }
 
@@ -202,6 +262,7 @@ static int run(const Options *opt, Arena *arena, Diag *diag) {
     case CMD_BUILD:
     case CMD_FMT: /* run_fmt does fmt */
     case CMD_SIGNER: /* run_signer writes the signer */
+    case CMD_VERIFIER: /* run_verifier writes the verifier */
       break;
   }
   return run_target(opt, &machine, diag);
@@ -348,10 +409,11 @@ int main(int argc, char **argv) {
   }
   Arena arena;
   arena_init(&arena, ARENA_LIMIT_BYTES);
-  int status = opt.command == CMD_FMT      ? run_fmt(&opt, &arena, &diag)
-               : opt.command == CMD_CHECK  ? run_check(&opt, &arena, &diag)
-               : opt.command == CMD_SIGNER ? run_signer(&opt, &diag)
-                                           : run(&opt, &arena, &diag);
+  int status = opt.command == CMD_FMT        ? run_fmt(&opt, &arena, &diag)
+               : opt.command == CMD_CHECK    ? run_check(&opt, &arena, &diag)
+               : opt.command == CMD_SIGNER   ? run_signer(&opt, &diag)
+               : opt.command == CMD_VERIFIER ? run_verifier(&opt, &diag)
+                                             : run(&opt, &arena, &diag);
   arena_release(&arena);
   /* run_check prints its own diagnostics. */
   if (status != 0 && diag.set && opt.command != CMD_CHECK) diag_print(&diag, stderr);

@@ -335,3 +335,11 @@ verifyAt h pk m sig = boolElim (λ b → ℕ → Bool) (λ u → boolElim (λ b 
 -- results as the S4 verify.
 verify : (pk : PubKey) → (m : Digest) → (sig : Sig (height pk)) → Bool
 verify pk m sig = verifyAt (height pk) pk m sig
+
+-- accept pk k m s is the L2 nonce binding (S6 D5): it is true when the
+-- index of s is the nonce k and verify pk m s is true. The EVM core does
+-- the same nonce compare before the hash work. At the D7 table sites, k is
+-- the nonce, m is the sigHash and true is the approve. Each arm takes a
+-- dummy argument, so eval computes verify only when the index is k.
+accept : (pk : PubKey) → (k : ℕ) → (m : Digest) → (s : Sig (height pk)) → Bool
+accept pk k m s = boolElim (λ b → ℕ → Bool) (λ u → verify pk m s) (λ u → false) (natEq (witness s) k) 0

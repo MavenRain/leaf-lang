@@ -41,3 +41,17 @@ l1Last = l1At pk4 (digest 1311768467463790320 0 0 14) 15
 
 l1Mid : Bool
 l1Mid = l1At pk4 (digest 5 6 7 8) 10
+
+-- L2 at h = 4 (S6 U3, D5): accept pk4 k m s is true only when the index of
+-- s is k. l2Ok i is the signature of msg at leaf i, at the nonce i.
+l2Ok : (i : ℕ) → Bool
+l2Ok i = accept pk4 i msg (signAt sk skPrf pk4 i msg)
+
+-- l2Next i is the same signature at the nonce i + 1.
+l2Next : (i : ℕ) → Bool
+l2Next i = accept pk4 (natAdd i 1) msg (signAt sk skPrf pk4 i msg)
+
+-- l2BadM is the signature of msg at leaf 7, at the nonce 7, over another
+-- message: the nonce compare passes and verify gives false.
+l2BadM : Bool
+l2BadM = accept pk4 7 (digest 5 6 7 8) (signAt sk skPrf pk4 7 msg)

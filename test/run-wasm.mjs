@@ -6,10 +6,12 @@
 // Signer mode (docs/PLAN.md 5.2) reads the stdin lines `keygen ID SKSEED
 // SKPRF PUBSEED [START]` (each seed 64 hex digits), `next`, `rootSum` (the
 // D30 sum of the root of the last keygen), `sign LEAF M` (M 64 hex digits:
-// it prints the D36 sum of the signature and keeps the signature) and
+// it prints the D36 sum of the signature and keeps the signature),
 // `verify M` (the kept signature against M and the public key of the last
-// keygen). It keeps the key position in DIR/ID.state and the EIP-8310
-// keystore JSON in DIR/ID.json.
+// keygen) and `shim NONCE M PK CALL` (S6 D13: it writes the public key of
+// the last keygen to the file PK and the EVM shim input of the kept
+// signature to the file CALL). It keeps the key position in DIR/ID.state and
+// the EIP-8310 keystore JSON in DIR/ID.json.
 // The env.commit import refuses a position that is not larger than the
 // position in DIR/ID.state: it prints `refused REFUSE_HIGH_WATER`, and the
 // run stops with exit 1. A bad signer line exits 2.
@@ -170,12 +172,46 @@ const signer = (dir) => {
     pkWords.forEach((v, w) => view().setBigUint64(128 + 8 * w, v, true));
     return trapOr(() => `verify ${verify(128n, 0n, sig) === 1n}`);
   };
+  // S6 D13: the 9 publicKey words of the last keygen go to the file PK, 8
+  // big-endian bytes each. The EVM shim input goes to the file CALL as hex:
+  // NONCE as 32 bytes, M as 32 bytes, then the 273 + 4H words of the kept
+  // signature, 8 big-endian bytes each. It prints the input length in bytes.
+  const be = (v, bytes) => v.toString(16).padStart(2 * bytes, "0");
+  const sigHexOf = () => {
+    const words = 273 + 4 * Number(pkWords[8]);
+    return Array.from({ length: words }, (_, w) => be(view().getBigUint64(Number(sig) + 8 * w, true), 8)).join("");
+  };
+  const writePk = (pkFile) => writeFileSync(pkFile, Buffer.from(pkWords.map((v) => be(v, 8)).join(""), "hex"));
+  const shimLine = ([nonce, m, pkFile, callFile]) => {
+    const sigHex = sigHexOf();
+    writePk(pkFile);
+    writeFileSync(callFile, `${be(BigInt(nonce), 32)}${m}${sigHex}\n`);
+    return `shim ${64 + sigHex.length / 2}`;
+  };
+  // S6 D17: the EVM entry 2 input (ERC-4337 v0.7) goes to the file CALL as
+  // hex: validateUserOp(userOp, M, FUNDS), with the userOp nonce NONCE, the
+  // empty initCode, callData and paymasterAndData, and the kept signature as
+  // signature (zero bytes pad it to a 32-byte word). The 9 userOp words come
+  // first (the 4 bytes fields as offsets), then the 4 tails. It prints the
+  // input length in bytes.
+  const useropLine = ([nonce, m, funds, pkFile, callFile]) => {
+    const sigHex = sigHexOf();
+    const word = (v) => be(BigInt(v), 32);
+    const userOp = [0, nonce, 0x120, 0x140, 0, 0, 0, 0x160, 0x180, 0, 0, 0, sigHex.length / 2].map(word).join("");
+    const pad = "0".repeat((64 - (sigHex.length % 64)) % 64);
+    const call = `19822f7c${word(0x60)}${m}${word(funds)}${userOp}${sigHex}${pad}`;
+    writePk(pkFile);
+    writeFileSync(callFile, `${call}\n`);
+    return `userop ${call.length / 2}`;
+  };
   const step = ([word, ...rest]) => {
     if (word === "keygen") return keygenLine(rest);
     if (word === "next" && rest.length === 0 && ks !== null) return trapOr(() => BigInt.asUintN(64, next(ks)).toString());
     if (word === "rootSum" && rest.length === 0 && root !== null) return `rootSum ${rootSum()}`;
     if (word === "sign" && rest.length === 2 && decimal.test(rest[0]) && BigInt(rest[0]) < 2n ** 64n && seed.test(rest[1]) && ks !== null) return signLine(rest);
     if (word === "verify" && rest.length === 1 && seed.test(rest[0]) && sig !== null) return verifyLine(rest);
+    if (word === "shim" && rest.length === 4 && decimal.test(rest[0]) && BigInt(rest[0]) < 2n ** 64n && seed.test(rest[1]) && sig !== null) return shimLine(rest);
+    if (word === "userop" && rest.length === 5 && decimal.test(rest[0]) && BigInt(rest[0]) < 2n ** 256n && seed.test(rest[1]) && decimal.test(rest[2]) && BigInt(rest[2]) < 2n ** 256n && sig !== null) return useropLine(rest);
     throw new Usage(`bad signer line: ${[word, ...rest].join(" ")}`);
   };
   const lockPath = join(dir, ".signer.lock");

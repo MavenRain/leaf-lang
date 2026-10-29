@@ -165,6 +165,32 @@ sessions 1 and 2; the entries are in section 11):
   Q-S5-40 (a) (USER 2026-10-28, U7d): the M6 mutant (verify with no H
   check) stays a known survivor; no new harness line.
 
+USER rulings on the S6 questions (2026-10-28, AskUserQuestion in the S6
+session 1; the entries are in section 11):
+
+- S6 = (a) for each item. S6 builds on the USER commit fac4ee2 (tree
+  fd287276: S5 and the USER review fixes).
+- Q-S6-1: the verifier is fixed EVM code that `langc verifier` writes by
+  hand in C, with no IR (the S5 signer pattern). The port takes only the
+  kit `src/asm.c` and `src/asm.h`, not the kit IR lowering, because the
+  kit lowering refuses loops.
+- Q-S6-2: entry 1 reads the signature hash and the nonce with TXPARAM
+  and the signature from calldata, and runs APPROVE with the scope
+  "both". The shim changes only these three table sites: the nonce and
+  the signature hash come from a 64-byte calldata prefix, and APPROVE
+  becomes a RETURN of the 32-byte word 1 (5.1).
+- Q-S6-5: the EIP-8141 signature hash covers the VERIFY frame data (the
+  calldata), so entry 1 reads the signature from entry 0 of the
+  transaction `signatures` list (scheme ARBITRARY), not from calldata.
+  The two builds first copy the signature to one memory region, and the
+  core reads it there. The copy is a fourth table site (5.1).
+- Q-S6-3: entry 2 returns 1 (`SIG_VALIDATION_FAILED`) on each accept
+  failure (signature, root, nonce sequence, nonce key not 0). Malformed
+  calldata and a caller that is not the v0.7 EntryPoint (a build
+  constant) revert. The account pays `missingAccountFunds` to the
+  caller (5.1).
+- Q-S6-4: the gas script runs one real H = 16 keygen in the Wasm signer.
+
 Not ruled. The plan takes (a) for each of these:
 
 - Q2 kit: (a) by default; the USER did not rule it.
@@ -528,21 +554,46 @@ message at nonce `k`. Only the affine signer stops the two signatures.
 
 ### 5.1 EVM account verifier
 
-- Entry 1, EIP-8141 VERIFY frame: the frame gives the signature hash, the
-  nonce and the signature in calldata. The contract computes `accept pk
-  nonce sigHash sig`. When it is true the contract runs APPROVE (0xaa),
-  else it reverts. The frame is a STATICCALL, so the contract writes no
-  state. `pk` (root, public seed, parameters) is a constant in the code.
-- Entry 2, ERC-4337 `validateUserOp(userOp, userOpHash, missingAccountFunds)`:
-  the same `accept` over `userOpHash` with the nonce sequence of key 0. It
-  returns 0 on success and 1 (`SIG_VALIDATION_FAILED`) on failure.
+- Entry 1, EIP-8141 VERIFY frame: the contract reads the signature hash
+  (TXPARAM 0xb0 with the param 0x08) and the nonce (TXPARAM with the
+  param 0x01) (Q-S6-2 (a)). It does not read the signature hash from
+  calldata: a calldata hash lets a caller use an old signature again
+  over a hash that the caller selects. The signature is the raw bytes of
+  entry 0 of the transaction `signatures` list: the scheme ARBITRARY
+  (0x0) and an empty `msg`, so the signature hash commits only to the
+  length of the bytes (Q-S6-5 (a)). SIGPARAM (0xb4, the param 0x03)
+  gives the length and SIGDATACOPY (0xb5) copies the bytes to memory.
+  The signature is not in calldata, because the signature hash covers
+  the frame data. The contract computes `accept pk nonce sigHash sig`.
+  When it is true the contract runs APPROVE (0xaa) with the scope 0x3
+  (APPROVE_EXECUTION_AND_PAYMENT, "both"), else it reverts. The frame is
+  a STATICCALL, so the contract writes no state. `pk` (root, public
+  seed, height) is a constant in the code.
+- The shim (O2, Q-S6-2 (a), Q-S6-5 (a)) is a build mode of entry 1. It
+  changes only the four table sites: the nonce and the signature hash
+  come from a 64-byte calldata prefix (bytes 0 to 31 the nonce, bytes 32
+  to 63 the signature hash), the signature is the calldata after the
+  prefix, and APPROVE becomes a RETURN of the 32-byte word 1. In the two
+  builds the core reads the signature from the same memory region.
+- Entry 2, ERC-4337 v0.7 `validateUserOp(userOp, userOpHash,
+  missingAccountFunds)`: the same `accept` over `userOpHash` with the
+  nonce sequence of key 0 (Q-S6-3 (a)). It returns 0 on success. It
+  returns 1 (`SIG_VALIDATION_FAILED`) when `accept` is false: a bad
+  signature, a wrong root, a wrong nonce sequence or a nonce key that is
+  not 0. A wrong signature length, an out-of-range ABI offset or a
+  truncated signature also returns 1 (Q-S6-6 (a)). Tuple and signature
+  spans are checked before any signature copy, including offset
+  overflow. A wrong selector or a caller other than the v0.7 EntryPoint
+  (a build constant) reverts. It pays `missingAccountFunds` to the caller
+  before the signature checks.
 - The opcodes and the TXPARAM fields of EIP-8141 are a draft (O1). The
   writer keeps them in one table.
 - The test EVM of the kit has no EIP-8141 (O2). S6 tests the core and
   entry 2 on it, and entry 1 through a shim that maps APPROVE to a return
   code.
-- Port: lang-template `hosts/tcc-evm-contract` (`src/asm.c`, `src/evm.c`,
-  `src/keccak.c`, the test harness `test/emittool.c`, `test/dispatch.sh`).
+- Port: lang-template `hosts/tcc-evm-contract` `src/asm.c` and
+  `src/asm.h` only (Q-S6-1 (a)). `langc verifier` (src/evm.c) writes the
+  verifier code by hand in C, with no IR.
 
 Gas estimate for one verify (v1 hash of Q6 (a), n = 32, w = 16, so len =
 67; h = 16). S6 measures it; these numbers are a plan only:
@@ -696,7 +747,7 @@ values everywhere.
 | Law | Statement | Slice |
 |---|---|---|
 | L1 correctness | for each keystore `ks` and message `m`, when `next ks` gives `(l, ks')`, `verifyAt (leafHeight l) (pk ks) m (sign l m)` is `true` (Q-S5-12 (a)) | S4 (U6: an eval check at h = 4 on the guest form `verify pk4 m (signAt sk skPrf pk4 i m)` for i = 0 to 15, test/eval/laws.lang), S5 (the keystore form: an eval check at h = 4 for the positions 0 to 15, and `next` gives `none` at 16, Q-S5-10 (a)) |
-| L2 nonce binding | `accept pk k m s` is `true` implies `index s` is `k` | S6 |
+| L2 nonce binding | `accept pk k m s` is `true` implies `index s` is `k` | S6 (U3: an eval check at h = 4 on the guest form, test/eval/laws.lang: for i = 0 to 15, `accept pk4 i m (signAt sk skPrf pk4 i m)` is `true` and `accept pk4 (i + 1) m (signAt sk skPrf pk4 i m)` is `false`; at the nonce of the signature, a different `m` gives `false`, D5) |
 | L3 commit-before-sign | in each `Durable` tree, each `sign` of a leaf with index `i` is under a `commit` node that writes `i + 1` | S5 (an eval row at h = 4: a guest fold checks that each `some (l, ks')` is under `commit (i + 1)` and that `index (sign l m)` is `i`, Q-S5-10 (a)) |
 | L4 no reset | the committed positions on each path of a `Durable` tree increase strictly | S5 (by construction: only `next` makes a `commit` node, Q-S5-7 (a)) |
 | L5 distinct leaves | two signatures that one program makes have different indices (from the affine check and L4) | S5 (a refusal fixture: two `sign` of one leaf and two `next` of one keystore are `REFUSE_AFFINE_REUSE`, "reset refused"; an eval row: two signatures of one program have different indices, Q-S5-10 (a)) |
@@ -782,7 +833,7 @@ on the new checks, docs, close (stage, commit message, next prompt).
 | S3 | affine layer: multiplicities, `-o`, resource sorts, sealed `Leaf` and `Keystore`, `Durable` (a spine: one recursive field in each constructor, O-U6b-1 (a)), the five refusal codes | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 12; check refusals 35; evals 70; ir 10 lowered; wasm 13 modules valid; differential 773 cases, 0 mismatches; fmt 91 canonical, 6 non-canonical pairs (round trip and idempotence); json 33 fixtures, diagnostics 46 codes (31 with a fixture, 15 with no fixture); gate 0 failures; review and domain regressions passed; one JSON fixture for each S3 code; 14 mutants on the five S3 refusals and the two `Durable` branches, 14 of 14 killed (docs/STATUS.md, S3) |
 | S4 | `Digest`, hash ops (opaque), WOTS+, L-tree, Merkle, `sign`, `verify`; reference Keccak in `langc eval`; L1, L6 | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 12; check refusals 38; evals 142; ir 10 lowered; wasm 13 modules valid; differential 773 cases, 0 mismatches; fmt 101 canonical, 6 non-canonical pairs (round trip and idempotence); json 33 fixtures, diagnostics 46 codes (31 with a fixture, 15 with no fixture); gate 0 failures; review and domain regressions passed; own vectors plus a cross-check of each hash op with `cast keccak` (Q-S4-1 (c)); L1 at h = 4 for i = 0 to 15 (test/eval/laws.lang); L6: three `check` rows refuse with `TYPE_REFL`; 10 mutants on the S4 checks, 10 of 10 killed (docs/STATUS.md, S4) |
 | S5 | `keygen`, `publicKey`, `next`, `commit`; Wasm signer (Keccak in the module, `commit` import, EIP-8310 JSON in the harness); L3 to L5 | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 12; check refusals 43; evals 162; ir 14 lowered; wasm 19 modules valid; differential 951 cases, 0 mismatches; signer 2 modules valid, 28 rows; fmt 115 canonical, 6 non-canonical pairs (round trip and idempotence); json 33 fixtures, diagnostics 49 codes (31 with a fixture, 18 with no fixture); gate 0 failures; review and domain regressions passed; Keccak known answers in the module (test/ir/hashkat.lang); the h = 4 signer against `langc eval` (`rootSum`, `sigSum` and `verify` at the positions 0, 7 and 15); reset refused (`REFUSE_HIGH_WATER`); at h = 10 the module signs and verifies; L1 (keystore form), L3 to L5 as eval rows at h = 4 and refusal fixtures (Q-S5-10); 11 mutants on src/wasm.c, 10 killed, M6 height a known survivor (Q-S5-40 (a)) (docs/STATUS.md, S5) |
-| S6 | EVM verifier: ERC-4337 entry, EIP-8141 entry with the shim, nonce binding L2; measured gas | bytecode runs in the kit EVM harness; wrong nonce and wrong root revert |
+| S6 | EVM verifier: ERC-4337 entry, EIP-8141 entry with the shim, nonce binding L2; measured gas | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 12; check refusals 43; evals 195; ir 14 lowered; wasm 19 modules valid; differential 951 cases, 0 mismatches; signer 2 modules valid, 95 rows; verifier ABI regressions 9 passed; fmt 115 canonical, 6 non-canonical pairs (round trip and idempotence); json 33 fixtures, diagnostics 49 codes (31 with a fixture, 18 with no fixture); gate 0 failures; review and domain regressions passed; `langc verifier` at h = 4 in `evm run`: the shim and entry 2 accept the 16 positions; a wrong nonce, a wrong message, a wrong root or a changed byte is refused (the shim reverts, entry 2 gives the word 1); the shim build is the real entry 1 build with the 5 table parts in the shim form (a byte compare; no EVM with EIP-8141, O2); L2 as the `accept` eval rows; `make gas` rows at H = 4, 10 and 16 (shim and entry 2; not in `make check`, Q-S6-8 (b)); 8 mutants on src/evm.c, 8 of 8 killed (docs/STATUS.md, S6) |
 | S7 | Poseidon2 binding (field of Q10) in `langc eval` and the zkml writer; `aggregate`; L7 | zkml-lang accepts the output; Poseidon2 vectors |
 | S8 | boundary exclusion: the signer service takes programs only; output manifests; rebuild compare | refusal tests; byte-identical rebuild |
 | S9 | agent kit: `SKILL.md`, grammar card, 5 graded examples, `langc mcp`, `langc explain`, `TOKEN-BASELINE.md`, final `AGENTS.md` | MCP stdio test; examples pass `check` |
@@ -790,9 +841,10 @@ on the new checks, docs, close (stage, commit message, next prompt).
 
 ## 10. Open items
 
-- O1: EIP-8141 is a draft (APPROVE 0xaa, TXPARAM, the signature hash). The
-  writer keeps the opcodes in one table. Each slice that touches the EVM
-  entry checks the spec again.
+- O1: EIP-8141 is a draft (APPROVE 0xaa, TXPARAM 0xb0, SIGPARAM 0xb4,
+  SIGDATACOPY 0xb5, the signature hash). The writer keeps the opcodes in
+  one table. Each slice that touches the EVM entry checks the spec again
+  (last check: S6 U4, 2026-10-28).
 - O2: the kit EVM harness has no EIP-8141. Entry 1 is tested through a
   shim until an EVM with EIP-8141 exists.
 - O3: Poseidon2 field. zkml-lang has BabyBear and BN254. leanSig uses
@@ -808,6 +860,11 @@ on the new checks, docs, close (stage, commit message, next prompt).
 - O9: `REFUSE_AFFINE_PATH` can be too strict for a path whose end points
   are equal by definition. S3 records each refused case it meets.
 - O10: calldata of about 2.7 KB per signature against the EIP-7623 floor.
+  S6 measured it (h = 16, the shim, means of 16 positions): 2760
+  bytes, standard 43600.5 gas, floor 109001.2 gas. Standard +
+  execution (139645.3) is more than the floor, so the transaction does
+  not pay the floor. The floor applies if the execution gas goes below
+  65400.7 (the floor minus standard).
 - O11: the leanSig target-sum encoding against the RFC 8391 checksum.
 - O12: reuse across runs (a restored backup) is outside the checker
   (section 4.5).
@@ -830,6 +887,19 @@ on the new checks, docs, close (stage, commit message, next prompt).
 - O20: the infix path type `x ≡ y` (the Cubical Agda spelling) waits for
   implicit arguments. Until then `Path A x y` is the only spelling
   (S2-Q1 (a)).
+- O21: the real entry 1 build has no `evm run` row and no gas row
+  (D19.4). evm 1.14.12 has no TXPARAM, SIGPARAM, SIGDATACOPY or
+  APPROVE (O2). The gate checks that the shim build is the real build
+  with the 5 table parts in the shim form (a byte compare). An EVM
+  with EIP-8141 closes it.
+- O22: the measured execution gas is more than the 5.1 estimate. At
+  h = 16 the shim mean is 96044.8 gas, approximately 1.7 times the
+  estimate of about 55k (docs/STATUS.md, S6 gas rows).
+- O23: an `execute` entry for the ERC-4337 account. The S6 account
+  can validate a UserOperation, but it cannot act (D12).
+- O24: the EIP-8141 SENDER frame. Entry 1 has only the VERIFY frame
+  (D12).
+- O25: deployment of the verifier code (D12).
 
 ## 11. Questions for the USER
 
@@ -1301,3 +1371,39 @@ with the new text.
   known survivor, with no new harness line. No gate row gives verify a
   public key of another height. (b) a harness line that gives verify a
   public key of a wrong height: not taken.
+
+S6 questions (W/S6-PROGRESS.md, Session 29). Marks (2026-10-28, S6
+session 1): the USER ruled each one. This block keeps only the ruled
+option.
+
+- Q-S6-1 the EVM writer. RULED (a) by the USER 2026-10-28: the
+  verifier is hand-written bytecode, `langc verifier --height H --pk
+  FILE [--entry 8141|4337] [--shim] -o FILE`, with no IR (the S5 signer
+  pattern). The port takes the kit `src/asm.c` and `src/asm.h` only.
+- Q-S6-2 entry 1 inputs. RULED (a) by the USER 2026-10-28: the real
+  entry 1 reads the signature hash and the nonce with TXPARAM, the
+  signature from calldata, and runs APPROVE with the scope "both". The
+  shim swaps the three table sites (a 64-byte calldata prefix, RETURN
+  of the word 1). Q-S6-5, RULED (a) by the USER 2026-10-28 (S6 U4),
+  corrects the signature source: entry 0 of the `signatures` list
+  (ARBITRARY), read with SIGPARAM 0xb4 and SIGDATACOPY 0xb5, because the
+  signature hash covers the frame data. The shim copies the calldata
+  after the prefix. The two builds copy the signature to one memory
+  region (5.1).
+- Q-S6-3 entry 2 failures. RULED (a) by the USER 2026-10-28: entry 2
+  returns 1 on each accept failure (signature, root, nonce sequence,
+  nonce key not 0). Malformed calldata and a caller that is not the
+  v0.7 EntryPoint (a build constant) revert. It pays
+  `missingAccountFunds` to the caller. The section 9 S6 gate reads
+  "return 1" for entry 2. Q-S6-6 RULED (a) and (a) by the USER
+  2026-10-28 makes this exact: a wrong signature length and ABI
+  offsets out of range are accept failures (return 1), so only a wrong
+  selector and another caller revert. The `missingAccountFunds` CALL
+  comes before the core. Q-S6-7 RULED (a) by the USER 2026-10-28: the
+  D10 root differential is the 32 accept rows (the EVM root is equal to
+  the pk root that the Wasm signer writes) and the 2 wrong-root rows.
+  There is no root-out build.
+- Q-S6-4 the H = 16 gas rows. RULED (a) by the USER 2026-10-28: the gas
+  script runs one real H = 16 keygen in the Wasm signer.
+- Q-S6-8 the gas script. RULED (b) by the USER 2026-10-28: a new script
+  in R, test/gas.sh, run by `make gas`, not by `make check`.
