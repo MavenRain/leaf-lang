@@ -178,7 +178,7 @@ static int signer_type(Machine *m, uint32_t d, char *const *args, int arg_count,
 }
 
 int zkml_command(Machine *m, const char *name, char *const *args, int arg_count, unsigned count,
-                 const char *out_path) {
+                 FILE *out) {
   uint32_t d = def_named(m, name), fin = def_named(m, "finAt");
   uint64_t n = 0;
   unsigned k;
@@ -199,8 +199,7 @@ int zkml_command(Machine *m, const char *name, char *const *args, int arg_count,
   w.fin_at = def_value(m, fin);
   w.open = 0;
   w.ok = w.fin_at != NULL;
-  w.out = fopen(out_path, "wb");
-  if (w.out == NULL) return diag_fail(m->diag, "IO", NULL, "cannot write '%s'", out_path) + 2;
+  w.out = out;
   write_head(w.out, name, count);
   for (k = 0; k < count && w.ok; k++) {
     fprintf(w.out, "def zkSigner%u : Nat -> List Nat := fun z => ", k);
@@ -212,6 +211,5 @@ int zkml_command(Machine *m, const char *name, char *const *args, int arg_count,
   fputs("nil", w.out);
   for (k = 0; k < count; k++) fputc(')', w.out);
   fputs("\ndef zkAggregate : Nat -> Nat := fun z => aggregate (zkSigners z)\n", w.out);
-  if (fclose(w.out) != 0) return diag_fail(m->diag, "IO", NULL, "cannot write '%s'", out_path) + 2;
   return w.ok ? 0 : diag_fail(m->diag, "EVAL_PRINT", name, "the value is not a signer of closed words") + 1;
 }

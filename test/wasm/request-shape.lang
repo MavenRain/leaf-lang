@@ -1,0 +1,5 @@
+-- A signer service request of the wrong type (S8 D4, the service rows of
+-- test/gate.sh): shape has the type ℕ, not the domain type Request, so the
+-- service refuses it with REFUSE_SIGN_REQUEST.
+shape : ℕ
+shape = 7

@@ -263,6 +263,37 @@ sessions 1, 2 and 4):
   row reads), on src/front/poseidon2.c (fronttool) and on src/main.c
   (the `--hash sha3` row). `langc zkml` takes Nat ARGS only: 5.3 says
   so, and the usage text does not change.
+- Q-S8-1 (2026-10-30): (a) the signer service is a service mode of the
+  harness test/run-wasm.mjs. It takes PROG ENTRY only, runs `langc check`
+  (the affine check is on) and refuses on exit 1 with the check code (for
+  example `REFUSE_AFFINE_REUSE`). It takes the signing request from the
+  checked program, and only then calls the module export `sign`. In
+  service mode a raw `sign LEAF M` line is refused with `REFUSE_RAW_SIGN`.
+  The mode uses the S5 state file, lock and `commit` import (O29).
+- Q-S8-2 (2026-10-30): (a) each writer output OUT gets a sidecar file
+  `OUT.manifest.json` with a fixed key order and fixed bytes: the command
+  and its flags, the source path and its keccak256 (the embedded domain
+  text when there is no PROG), the langc commit and the dirty flag, the
+  law counts of `check --json`, and the output size and keccak256 (O31).
+- Q-S8-3 (2026-10-30): (a) the Makefile writes build/version.c from `git
+  rev-parse HEAD` and a dirty flag (`git status --porcelain` is not
+  empty). A manifest made by a dirty langc records dirty true, and `langc
+  rebuild` refuses it (O30).
+- Q-S8-4 (2026-10-30): (a) `langc rebuild MANIFEST` checks the source hash
+  and the langc commit, runs the writer again in memory and compares the
+  bytes with the output file. A difference gives exit 1 and a refusal
+  code. All four writers (`build`, `signer`, `verifier`, `zkml`) write a
+  manifest.
+- Q-S8-5 (2026-10-30): (a) `langc rebuild` refuses a manifest with dirty
+  true with its own refusal code. A gate run on a dirty tree checks only
+  that refusal code. The clean-tree rebuild row (exit 0, the same bytes)
+  waits for U6, after the USER commit (O30).
+- Q-S8-6 (2026-10-30): (a) the signing request is the domain type
+  `Request` with the constructor `request KEY LEAF M` (domain/domain.lang).
+  `check` proves that ENTRY is a request, and only the domain can declare
+  the constructor `request` (R1). The embedded domain text changes, so the
+  manifest source hashes of `signer` and `verifier` change; the gate
+  computes them (S8 D4).
 
 Not ruled. The plan takes (a) for each of these:
 
@@ -769,6 +800,24 @@ Gas estimate for one verify (v1 hash of Q6 (a), n = 32, w = 16, so len =
   differential test) at h = 4. At h = 10 only the module runs:
   run-wasm.mjs signs and verifies at 3 positions, with no eval compare
   (Q-S5-11 (a), R1).
+- Service mode (S8 D4, Q-S8-1 (a), Q-S8-6 (a)): test/run-wasm.mjs `FILE
+  --service DIR` has the stdin lines and the state of `--key DIR`, with
+  two changes. A `sign` line is refused with REFUSE_RAW_SIGN (exit 1, no
+  module call, no state change). The line `request PROG ENTRY` runs
+  `langc check PROG`, then `langc eval PROG ENTRY` (build/langc next to the
+  harness, no shell). A refusal of the two prints its code (for example
+  REFUSE_AFFINE_REUSE) and exits 1. ENTRY must give a value of the domain
+  type Request, `request KEY LEAF (digest W0 W1 W2 W3)`. KEY must be the
+  ID of the last keygen, LEAF must be less than 2^H and each word must fit
+  u64, else REFUSE_SIGN_REQUEST. LEAF is a leaf index, as in signAt (O32).
+  A LEAF below the next position of the key is refused with
+  REFUSE_HIGH_WATER, and a LEAF above it with REFUSE_SIGN_REQUEST, so the
+  service skips no leaf and a refused request reserves no leaf. Then the
+  harness calls `next` (env.commit writes LEAF + 1) and signs M (W0 to W3,
+  16 hex digits each) as `sign LEAF+1 M` of `--key` mode: it prints
+  `sigSum N` and keeps the signature for `verify`, `shim` and `userop`.
+  `--key DIR` does not change. The service rows of test/gate.sh check the
+  mode (D4f).
 
 ### 5.3 zkml-lang program
 
@@ -942,7 +991,7 @@ on the new checks, docs, close (stage, commit message, next prompt).
 | S5 | `keygen`, `publicKey`, `next`, `commit`; Wasm signer (Keccak in the module, `commit` import, EIP-8310 JSON in the harness); L3 to L5 | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 12; check refusals 43; evals 162; ir 14 lowered; wasm 19 modules valid; differential 951 cases, 0 mismatches; signer 2 modules valid, 28 rows; fmt 115 canonical, 6 non-canonical pairs (round trip and idempotence); json 33 fixtures, diagnostics 49 codes (31 with a fixture, 18 with no fixture); gate 0 failures; review and domain regressions passed; Keccak known answers in the module (test/ir/hashkat.lang); the h = 4 signer against `langc eval` (`rootSum`, `sigSum` and `verify` at the positions 0, 7 and 15); reset refused (`REFUSE_HIGH_WATER`); at h = 10 the module signs and verifies; L1 (keystore form), L3 to L5 as eval rows at h = 4 and refusal fixtures (Q-S5-10); 11 mutants on src/wasm.c, 10 killed, M6 height a known survivor (Q-S5-40 (a)) (docs/STATUS.md, S5) |
 | S6 | EVM verifier: ERC-4337 entry, EIP-8141 entry with the shim, nonce binding L2; measured gas | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 12; check refusals 43; evals 195; ir 14 lowered; wasm 19 modules valid; differential 951 cases, 0 mismatches; signer 2 modules valid, 95 rows; verifier ABI regressions 9 passed; fmt 115 canonical, 6 non-canonical pairs (round trip and idempotence); json 33 fixtures, diagnostics 49 codes (31 with a fixture, 18 with no fixture); gate 0 failures; review and domain regressions passed; `langc verifier` at h = 4 in `evm run`: the shim and entry 2 accept the 16 positions; a wrong nonce, a wrong message, a wrong root or a changed byte is refused (the shim reverts, entry 2 gives the word 1); the shim build is the real entry 1 build with the 5 table parts in the shim form (a byte compare; no EVM with EIP-8141, O2); L2 as the `accept` eval rows; `make gas` rows at H = 4, 10 and 16 (shim and entry 2; not in `make check`, Q-S6-8 (b)); 8 mutants on src/evm.c, 8 of 8 killed (docs/STATUS.md, S6) |
 | S7 | Poseidon2 binding (field of Q10) in `langc eval` and the zkml writer; `aggregate`; L7 | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 12; check refusals 44; evals 205; poseidon2 evals 7 (the L1 rows at h = 4, L7 at N = 1, the `--hash sha3` USAGE row); zkml 1 checked (zkml-lang accepts the `langc zkml` output of the L7 entry at N = 1); zkml known answers 6 evals (Q-S7-14 (a)); ir 14 lowered; wasm 19 modules valid; differential 951 cases, 0 mismatches; signer 2 modules valid, 95 rows; verifier ABI regressions 9 passed; fmt 116 canonical, 6 non-canonical pairs (round trip and idempotence); json 33 fixtures, diagnostics 49 codes (31 with a fixture, 18 with no fixture); gate 0 failures; review, signer persistence and domain regressions passed; fronttool: the Poseidon2 vectors of Plonky3 (the (ii) instance at seed 1, the (i) instance on 0..15 and on the (ii) input) and the 5.4 sponge digests on 96, 128 and 160 bytes; 12 mutants on zkml/xmss.lang, src/zkml.c, src/front/poseidon2.c and src/main.c, 12 of 12 killed, 2 of them by a data word check out of `make check` (docs/STATUS.md, S7) |
-| S8 | boundary exclusion: the signer service takes programs only; output manifests; rebuild compare | refusal tests; byte-identical rebuild |
+| S8 | boundary exclusion: the signer service takes programs only; output manifests; rebuild compare | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 12; check refusals 44; evals 205; poseidon2 evals 7; zkml 1 checked; service 10 checked (the service mode of test/run-wasm.mjs: the good request and 9 bad requests, Q-S8-1 (a), Q-S8-6 (a)); manifests 23 checked (`OUT.manifest.json` of each writer, Q-S8-2 (a)); rebuilds 9 checked (the `langc rebuild` refusals on a tree with a change, Q-S8-5 (a); the clean-tree rows wait for S8 U6); verifier ABI regressions 9 passed; gate 0 failures; review, signer persistence, domain and zkml writer regressions passed (zkml writer 7); 19 mutants on test/run-wasm.mjs, src/main.c and src/manifest.c: 14 killed, 3 EQUIVALENT (the service mutants S8 and S10, the ws check), B4 and B5 not reached on a tree with a change (S8 U6) (docs/STATUS.md, S8) |
 | S9 | agent kit: `SKILL.md`, grammar card, 5 graded examples, `langc mcp`, `langc explain`, `TOKEN-BASELINE.md`, final `AGENTS.md` | MCP stdio test; examples pass `check` |
 | S10 | close: `docs/STATUS.md`, `docs/VALIDATION.md`, full gate, mutant summary | full gate EXIT 0 |
 
@@ -1020,6 +1069,25 @@ on the new checks, docs, close (stage, commit message, next prompt).
   does not fit 5 steps and a root of h = 4 (Session 59). The 6 Z
   known-answer evals of the gate (Q-S7-14 (a)) use 569 to 871 MiB max
   RSS (Session 63).
+- O29: in S8 only the service mode of the harness checks the program
+  before a signature (Q-S8-1 (a)). The module export `sign` stays callable
+  by any other host that loads the signer module, and such a host can sign
+  a raw request. A deployment that needs the boundary must run the module
+  only under the service.
+- O30: the manifest records the langc commit, not the C compiler (tcc) or
+  its version. The same commit built by another compiler can write other
+  bytes, and then `langc rebuild` refuses. Also a gate run on a dirty tree
+  makes manifests with dirty true (Q-S8-3 (a)), so the rebuild rows of the
+  gate need a ruling for that case (S8 U3).
+- O31: the manifest is not signed. It binds the output bytes to the
+  source bytes and to a langc commit, but it does not identify the person
+  or the machine that made it.
+- O32: the leaf in a signing request is an index (ℕ), not a `Leaf` value.
+  The one-time rule for it is the S5 state (env.commit,
+  REFUSE_HIGH_WATER), not the affine check of the program. A Leaf-typed
+  request needs a keystore in the program, and a keystore comes only from
+  `keygen` with the seeds, which the service must not give to a program
+  (S8 D4d).
 
 ## 11. Questions for the USER
 

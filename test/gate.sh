@@ -15,6 +15,53 @@ echo "examples: $count checked, $fail failed"
 
 tmp=${TMPDIR:-/tmp}/langc-gate.$$
 mkdir -p "$tmp"
+
+# keccak_of FILE: the keccak256 of the bytes of FILE (`cast keccak`: 0x, hex).
+# cast reads 0x and the hex on stdin: as one argv word, the hex of a big OUT is
+# too long ("Argument list too long").
+keccak_of() {
+  { printf 0x; od -An -v -tx1 "$1" | tr -d ' \n'; } | cast keccak
+}
+
+# manifest_ok OUT WORDS SOURCE [SOURCE2] (S8 D2): OUT and OUT.manifest.json
+# exist; the manifest is one line with the keys in the D2a order; `command`
+# is WORDS (no -o OUT pair); the sources are SOURCE (`<domain>` has the bytes
+# of domain/domain.lang) and SOURCE2 with their keccak256; `commit` is 40 hex
+# digits; `dirty` is true or false; the output size and keccak256 are those
+# of OUT. It prints the cause on stderr.
+manifests=0
+manifest_ok() {
+  if [ ! -f "$1" ] || [ ! -f "$1.manifest.json" ]; then
+    echo "manifest: $1 or its manifest is missing" >&2
+    return 1
+  fi
+  m_cmd=
+  for m_word in $2; do
+    m_cmd="$m_cmd${m_cmd:+,}\"$m_word\""
+  done
+  m_file=$3
+  [ "$3" != "<domain>" ] || m_file=domain/domain.lang
+  m_src="{\"path\":\"$3\",\"keccak256\":\"$(keccak_of "$m_file")\"}"
+  if [ -n "${4:-}" ]; then
+    m_src="$m_src,{\"path\":\"$4\",\"keccak256\":\"$(keccak_of "$4")\"}"
+  fi
+  m_head="{\"manifest\":1,\"command\":[$m_cmd],\"source\":[$m_src],\"langc\":{\"commit\":\""
+  m_tail="\"output\":{\"path\":\"$1\",\"size\":$(wc -c <"$1" | tr -d ' '),\"keccak256\":\"$(keccak_of "$1")\"}}"
+  m_text=$(cat "$1.manifest.json")
+  case "$m_text" in
+    "$m_head"*"},\"laws\":{\"parsed\":\""*"},$m_tail") ;;
+    *)
+      echo "manifest: $1.manifest.json is not the D2a line: $m_text" >&2
+      return 1
+      ;;
+  esac
+  if [ "$(wc -l <"$1.manifest.json" | tr -d ' ')" != 1 ] ||
+    ! printf '%s\n' "$m_text" | rg -q '"langc":\{"commit":"[0-9a-f]{40}","dirty":(true|false)\},"laws"'; then
+    echo "manifest: $1.manifest.json is not one line, or commit or dirty is wrong" >&2
+    return 1
+  fi
+  manifests=$((manifests + 1))
+}
 awk 'BEGIN { printf "deep : ℕ\ndeep = " } { } END {
   for (i = 0; i < 1100; i++) printf "("; printf "1"; for (i = 0; i < 1100; i++) printf ")"; print "" }' </dev/null >"$tmp/deep.lang"
 
@@ -133,6 +180,9 @@ echo "poseidon2 evals: $p2evals checked"
 if [ -x ../zkml-lang/build/langc ]; then
   status=0
   build/langc zkml --count 1 test/eval/laws.lang l7Entry 1 -o "$tmp/zk.lang" 2>"$tmp/err" || status=$?
+  [ "${status:-0}" -ne 0 ] ||
+    manifest_ok "$tmp/zk.lang" "zkml --count 1 test/eval/laws.lang l7Entry 1" test/eval/laws.lang 2>"$tmp/m.err" ||
+    { echo "FAIL zkml manifest: $(head -n 1 "$tmp/m.err")"; fail=$((fail + 1)); }
   got=
   [ "$status" -ne 0 ] || got=$(../zkml-lang/build/langc check "$tmp/zk.lang" 2>&1) || status=$?
   case "$status|$got" in
@@ -255,7 +305,7 @@ for f in examples/*.lang test/ir/spine.lang test/ir/lazy.lang test/ir/proof-trap
   test/ir/hash.lang test/ir/keystore.lang test/ir/hashkat.lang test/ir/tweakflag.lang test/ir/hash-lazy.lang; do
   w="$tmp/$(basename "$f" .lang).wasm"
   wasms=$((wasms + 1))
-  if ! build/langc build "$f" -o "$w" 2>"$tmp/w.err" || ! wasm-validate "$w" 2>>"$tmp/w.err" ||
+  if ! build/langc build "$f" -o "$w" 2>"$tmp/w.err" || ! manifest_ok "$w" "build $f" "$f" 2>>"$tmp/w.err" || ! wasm-validate "$w" 2>>"$tmp/w.err" ||
     ! wasm-objdump -x "$w" >/dev/null 2>>"$tmp/w.err"; then
     echo "FAIL wasm $f: $(head -n 1 "$tmp/w.err")"
     fail=$((fail + 1))
@@ -293,6 +343,7 @@ signers=0
 signer_rows=0
 for h in 4 10; do
   if build/langc signer --height "$h" -o "$tmp/signer$h.wasm" 2>"$tmp/w.err" &&
+    manifest_ok "$tmp/signer$h.wasm" "signer --height $h" "<domain>" 2>>"$tmp/w.err" &&
     wasm-validate "$tmp/signer$h.wasm" 2>>"$tmp/w.err" && wasm-objdump -x "$tmp/signer$h.wasm" >/dev/null 2>>"$tmp/w.err"; then
     signers=$((signers + 1))
   else
@@ -352,6 +403,55 @@ signer_has "$tmp/k4r/1.json" '"pub_seed": "404142434445464748494a4b4c4d4e4f50515
 signer_run 10 "$tmp/k10" 0 "4096 1" "keygen 2 $seeds" next
 signer_has "$tmp/k10/2.state" 1
 signer_has "$tmp/k10/2.json" '"capacity": 1023'
+# The signer service (S8 D4, docs/PLAN.md 5.2): --service DIR has the lines
+# of --key DIR, refuses a raw `sign` line (REFUSE_RAW_SIGN) and signs only a
+# request from a checked program (`request PROG ENTRY`, ENTRY of the domain
+# type Request). The good request signs as `next` and `sign 1 M` of --key
+# mode on a fresh DIR with the same key, and the same request again is
+# refused (REFUSE_HIGH_WATER). A refused line leaves DIR/7.state the same.
+# service_run DIR STATUS WANT LINE...: the LINEs on stdin of the h = 4 module
+# with --service DIR give exit STATUS and the output lines WANT (joined by
+# spaces). With STATUS 1, DIR/7.state also stays the same as $tmp/7.state.
+service_rows=0
+service_run() {
+  service_rows=$((service_rows + 1))
+  sv_dir=$1
+  sv_status=$2
+  sv_want=$3
+  shift 3
+  printf '%s\n' "$@" >"$tmp/in.txt"
+  status=0
+  node test/run-wasm.mjs "$tmp/signer4.wasm" --service "$sv_dir" <"$tmp/in.txt" >"$tmp/out.txt" 2>"$tmp/w.err" || status=$?
+  got=$(paste -s -d ' ' "$tmp/out.txt")
+  [ "$status" -eq "$sv_status" ] && [ "$got" = "$sv_want" ] ||
+    { echo "FAIL service '$2': want exit $sv_status '$sv_want', got exit $status '$got' $(head -n 1 "$tmp/w.err")"; fail=$((fail + 1)); }
+  [ "$sv_status" -eq 0 ] || cmp -s "$sv_dir/7.state" "$tmp/7.state" ||
+    { echo "FAIL service '$2': $sv_dir/7.state changed"; fail=$((fail + 1)); }
+}
+req_m=000000000000000d000000000000000e000000000000000f0000000000000010
+mkdir "$tmp/k4q" "$tmp/k4k"
+req_sign=$(printf '%s\n' "keygen 7 $seeds" next "sign 1 $req_m" | node test/run-wasm.mjs "$tmp/signer4.wasm" --key "$tmp/k4k" 2>&1 | tail -n 1)
+service_run "$tmp/k4q" 0 "4096 $req_sign verify true" "keygen 7 $seeds" "request test/wasm/request.lang req" "verify $req_m"
+cp "$tmp/k4q/7.state" "$tmp/7.state" || : >"$tmp/7.state"
+[ "$(cat "$tmp/7.state")" = 1 ] || { echo "FAIL service: 7.state is not 1 after the good request"; fail=$((fail + 1)); }
+service_run "$tmp/k4q" 1 "4096 refused REFUSE_HIGH_WATER" "keygen 7 $seeds" "request test/wasm/request.lang req"
+service_run "$tmp/k4q" 1 "4096 refused REFUSE_RAW_SIGN" "keygen 7 $seeds" "sign 1 $req_m"
+service_run "$tmp/k4q" 1 "4096 refused REFUSE_AFFINE_REUSE" "keygen 7 $seeds" "request test/json/REFUSE_AFFINE_REUSE.lang dup"
+service_run "$tmp/k4q" 1 "4096 refused REFUSE_SIGN_REQUEST" "keygen 7 $seeds" "request test/wasm/request-shape.lang shape"
+service_run "$tmp/k4q" 1 "4096 refused REFUSE_SIGN_REQUEST" "keygen 7 $seeds" "request test/wasm/request.lang wrongKey"
+# S8 D5: a LEAF above the next leaf index is refused. A LEAF past the 2^4
+# leaves is refused: a keygen with START does not write DIR/7.state, so the
+# row copies $tmp/7.state into DIR first. A PROG that langc cannot read
+# stops the service with exit 2 (a bad request line).
+service_run "$tmp/k4q" 1 "4096 refused REFUSE_SIGN_REQUEST" "keygen 7 $seeds" "request test/wasm/request.lang skipLeaf"
+mkdir "$tmp/k4t"
+cp "$tmp/7.state" "$tmp/k4t/7.state"
+service_run "$tmp/k4t" 1 "4096 refused REFUSE_SIGN_REQUEST" "keygen 7 $seeds 16" "request test/wasm/request.lang pastHeight"
+service_run "$tmp/k4q" 2 "4096" "keygen 7 $seeds" "request test/wasm/nosuch.lang req"
+# An ENTRY of a function type to Request is refused: eval prints `fun n => `
+# before the request text, and the request form must start at ^.
+service_run "$tmp/k4q" 1 "4096 refused REFUSE_SIGN_REQUEST" "keygen 7 $seeds" "request test/wasm/request.lang fnReq"
+echo "service: $service_rows checked"
 # sign and verify (D36 to D39): at h = 4 the harness sigSum of the signature
 # at the position P is the eval sumP of test/wasm/sign4.lang (the same seeds
 # and M), and `verify M` gives the eval okP. A second sign of one leaf traps
@@ -423,7 +523,8 @@ shim_run "$tmp/call-m.hex" " error: execution reverted"
 # pk at h = 4. Each of the 5 table parts in the real form (the sig length
 # 2312 is 0x0908) is in it once, and with the shim form in their place it
 # is the shim build: the same length and the same bytes.
-build/langc verifier --height 4 --pk "$tmp/pk4.bin" -o "$tmp/real4.hex" 2>"$tmp/w.err" ||
+{ build/langc verifier --height 4 --pk "$tmp/pk4.bin" -o "$tmp/real4.hex" 2>"$tmp/w.err" &&
+  manifest_ok "$tmp/real4.hex" "verifier --height 4 --pk $tmp/pk4.bin" "<domain>" "$tmp/pk4.bin" 2>>"$tmp/w.err"; } ||
   { echo "FAIL verifier real h = 4: $(head -n 1 "$tmp/w.err")"; fail=$((fail + 1)); }
 real_hex=$(cat "$tmp/real4.hex")
 shim_hex=$(cat "$tmp/rt4.hex")
@@ -654,6 +755,64 @@ for f in $(printf '%s\n' test/json/*.lang | rg '^test/json/[A-Z_]+\.lang$'); do
   rg -q -x -F "$(basename "$f" .lang)" "$tmp/doc-codes.txt" || { echo "FAIL $f: the code is not in docs/DIAGNOSTICS.md"; fail=$((fail + 1)); }
 done
 echo "json: $jsons fixtures; diagnostics: $codes codes, $fixtures with a fixture, $reasons with no fixture"
+
+# D2i: a byte below 0x20 in a word or a path gives USAGE (exit 2), and langc
+# writes neither OUT nor the manifest.
+ctl_out="$tmp/$(printf 'c\001')out.wasm"
+ctl_status=0
+build/langc signer --height 4 -o "$ctl_out" 2>/dev/null || ctl_status=$?
+if [ "$ctl_status" -ne 2 ] || [ -e "$ctl_out" ] || [ -e "$ctl_out.manifest.json" ]; then
+  echo "FAIL manifest: a control byte in OUT gives exit $ctl_status, or a file is left"
+  fail=$((fail + 1))
+fi
+if ! command -v cast >/dev/null; then
+  echo "FAIL manifest: cast is not on the PATH"
+  fail=$((fail + 1))
+fi
+echo "manifests: $manifests checked"
+
+# D3f (Q-S8-5 (a)): `langc rebuild` refusals on a tree with a change. The
+# rows for exit 0, SOURCE, WRITER and OUTPUT need a clean tree (S8 U6); on a
+# clean tree the DIRTY row becomes the exit 0 row.
+rebuilds=0
+# rebuild_row STATUS CODE [WORDS...]: `langc rebuild WORDS` gives exit STATUS
+# and CODE on stderr.
+rebuild_row() {
+  rb_want=$1
+  rb_code=$2
+  shift 2
+  rb_status=0
+  build/langc rebuild "$@" >/dev/null 2>"$tmp/rb.err" || rb_status=$?
+  rebuilds=$((rebuilds + 1))
+  if [ "$rb_status" -ne "$rb_want" ] || ! rg -q -F "$rb_code" "$tmp/rb.err"; then
+    echo "FAIL rebuild $*: want exit $rb_want and $rb_code, got exit $rb_status: $(head -n 1 "$tmp/rb.err")"
+    fail=$((fail + 1))
+  fi
+}
+rb_src=$(printf '%s\n' examples/*.lang | head -n 1)
+rb_out="$tmp/rb.wasm"
+if ! build/langc build "$rb_src" -o "$rb_out" 2>"$tmp/rb.err"; then
+  echo "FAIL rebuild: build $rb_src gives an error: $(head -n 1 "$tmp/rb.err")"
+  fail=$((fail + 1))
+fi
+rebuild_row 1 REFUSE_REBUILD_DIRTY "$rb_out.manifest.json"
+# S8 D6: the two message rows of the DIRTY refusal. They hold only on a tree
+# with a change, so S8 U6 changes them with the DIRTY row. The manifest of
+# this langc has "dirty":true, so rebuild refuses it with the manifest
+# message. A copy with "dirty":false gets the message of this langc.
+rebuild_row 1 "is from a langc of a tree with a change" "$rb_out.manifest.json"
+awk '{ sub(/"dirty":true/, "\"dirty\":false"); print }' "$rb_out.manifest.json" >"$tmp/rb-clean.json"
+rebuild_row 1 "this langc is from a tree with a change" "$tmp/rb-clean.json"
+awk '{ z = sprintf("%040d", 0); sub(/"commit":"[0-9a-f]+"/, "\"commit\":\"" z "\""); print }' "$rb_out.manifest.json" >"$tmp/rb-commit.json"
+rebuild_row 1 REFUSE_REBUILD_COMMIT "$tmp/rb-commit.json"
+printf '%s' "$(cat "$rb_out.manifest.json")" >"$tmp/rb-line.json"
+rebuild_row 1 REFUSE_REBUILD_MANIFEST "$tmp/rb-line.json"
+awk '{ sub(/"command":\["build"/, "\"command\":[\"check\""); print }' "$rb_out.manifest.json" >"$tmp/rb-word.json"
+rebuild_row 1 REFUSE_REBUILD_MANIFEST "$tmp/rb-word.json"
+rebuild_row 2 IO "$tmp/rb-missing.json"
+rebuild_row 2 USAGE
+rebuild_row 2 USAGE "$rb_out.manifest.json" "$rb_out.manifest.json"
+echo "rebuilds: $rebuilds checked"
 
 rm -rf "$tmp"
 

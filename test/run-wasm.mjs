@@ -3,6 +3,7 @@
 // Usage: node test/run-wasm.mjs FILE NAME [ARGS...]
 //        node test/run-wasm.mjs FILE -   (one `NAME [ARGS...]` line on stdin per call)
 //        node test/run-wasm.mjs FILE --key DIR   (the `langc signer` module)
+//        node test/run-wasm.mjs FILE --service DIR   (the signer service, S8 D4)
 // Signer mode (docs/PLAN.md 5.2) reads the stdin lines `keygen ID SKSEED
 // SKPRF PUBSEED [START]` (each seed 64 hex digits), `next`, `rootSum` (the
 // D30 sum of the root of the last keygen), `sign LEAF M` (M 64 hex digits:
@@ -15,12 +16,23 @@
 // The env.commit import refuses a position that is not larger than the
 // position in DIR/ID.state: it prints `refused REFUSE_HIGH_WATER`, and the
 // run stops with exit 1. A bad signer line exits 2.
+// Service mode (docs/PLAN.md 5.2, S8 D4) has the lines and the state of
+// signer mode, with two changes. A `sign` line prints `refused
+// REFUSE_RAW_SIGN` (exit 1, no module call). The line `request PROG ENTRY`
+// runs `langc check PROG` and `langc eval PROG ENTRY`, and ENTRY must give
+// `request KEY LEAF (digest W0 W1 W2 W3)` (the domain type Request). KEY
+// must be the ID of the last keygen and LEAF the next leaf index of that
+// key (a lower LEAF is REFUSE_HIGH_WATER). Then `next` reserves the leaf
+// and the line signs M (W0 to W3) as `sign LEAF+1 M`. A refusal of check or
+// eval prints its code; another request prints REFUSE_SIGN_REQUEST.
+import { spawnSync } from "node:child_process";
 import { closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const [file, name, ...args] = process.argv.slice(2);
-if (file === undefined || name === undefined || (name === "--key" && args.length !== 1)) {
-  process.stderr.write("usage: node test/run-wasm.mjs FILE NAME [ARGS...] | FILE - | FILE --key DIR\n");
+if (file === undefined || name === undefined || ((name === "--key" || name === "--service") && args.length !== 1)) {
+  process.stderr.write("usage: node test/run-wasm.mjs FILE NAME [ARGS...] | FILE - | FILE --key DIR | FILE --service DIR\n");
   process.exit(2);
 }
 
@@ -45,7 +57,7 @@ const program = () => {
 class Refused extends Error {}
 class Usage extends Error {}
 
-const signer = (dir) => {
+const signer = (dir, service) => {
   const heights = new Map(); // key id -> the tree height H
   const statePath = (id) => join(dir, `${id}.state`);
   const jsonPath = (id) => join(dir, `${id}.json`);
@@ -166,6 +178,37 @@ const signer = (dir) => {
       return `sigSum ${sigSum()}`;
     });
   };
+  // S8 D4b: build/langc next to this harness, with no shell. Exit 0 gives the
+  // stdout. Exit 1 refuses with the code of the first stderr line `langc:
+  // CODE: ...`, and exit 2 is a bad request line.
+  const langc = fileURLToPath(new URL("../build/langc", import.meta.url));
+  const langcRun = (words) => {
+    const run = spawnSync(langc, words, { encoding: "utf8" });
+    const code = /^langc: ([A-Z0-9_]+): /.exec(run.stderr ?? "");
+    if (run.status === 0) return run.stdout;
+    if (run.status === 1 && code !== null) throw new Refused(code[1]);
+    if (run.status === 2) throw new Usage(`bad request line: langc ${words.join(" ")}`);
+    throw new Error(`langc ${words.join(" ")}: exit ${run.status}: ${run.error ?? run.stderr}`);
+  };
+  // S8 D4b: `request PROG ENTRY` (service mode). ENTRY of the checked PROG
+  // must give a value of the domain type Request (Q-S8-6 (a)).
+  const nat = "(0|[1-9][0-9]*)";
+  const requestForm = new RegExp(`^request ${nat} ${nat} \\(digest ${nat} ${nat} ${nat} ${nat}\\)\\n$`);
+  // The state block (D20): the key id at word 0, the next position at word 1.
+  const stateWord = (w) => view().getBigUint64(Number(ks) + 8 * w, true);
+  const requestLine = ([prog, entry]) => {
+    langcRun(["check", prog]);
+    const form = requestForm.exec(langcRun(["eval", prog, entry]));
+    if (form === null) throw new Refused("REFUSE_SIGN_REQUEST");
+    const [key, leaf, ...ws] = form.slice(1).map(BigInt);
+    if (key !== stateWord(0) || leaf >= 2n ** pkWords[8] || ws.some((w) => w >= 2n ** 64n)) throw new Refused("REFUSE_SIGN_REQUEST");
+    // One request for each leaf (O32): a LEAF below the next position is used,
+    // and the service skips no leaf.
+    if (leaf < stateWord(1)) throw new Refused("REFUSE_HIGH_WATER");
+    if (leaf > stateWord(1)) throw new Refused("REFUSE_SIGN_REQUEST");
+    next(ks);
+    return signLine([(leaf + 1n).toString(), ws.map((w) => w.toString(16).padStart(16, "0")).join("")]);
+  };
   // D36: M goes to 0 and the publicKey block of the last keygen to 128.
   const verifyLine = ([m]) => {
     put(0, m);
@@ -208,6 +251,8 @@ const signer = (dir) => {
     if (word === "keygen") return keygenLine(rest);
     if (word === "next" && rest.length === 0 && ks !== null) return trapOr(() => BigInt.asUintN(64, next(ks)).toString());
     if (word === "rootSum" && rest.length === 0 && root !== null) return `rootSum ${rootSum()}`;
+    if (word === "sign" && service) throw new Refused("REFUSE_RAW_SIGN");
+    if (word === "request" && service && rest.length === 2 && ks !== null) return requestLine(rest);
     if (word === "sign" && rest.length === 2 && decimal.test(rest[0]) && BigInt(rest[0]) < 2n ** 64n && seed.test(rest[1]) && ks !== null) return signLine(rest);
     if (word === "verify" && rest.length === 1 && seed.test(rest[0]) && sig !== null) return verifyLine(rest);
     if (word === "shim" && rest.length === 4 && decimal.test(rest[0]) && BigInt(rest[0]) < 2n ** 64n && seed.test(rest[1]) && sig !== null) return shimLine(rest);
@@ -244,5 +289,5 @@ const signer = (dir) => {
   }
 };
 
-if (name === "--key") signer(args[0]);
+if (name === "--key" || name === "--service") signer(args[0], name === "--service");
 else program();

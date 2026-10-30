@@ -73,6 +73,11 @@ data Durable (A : Type 0) : Type where
   done : (doneOf : A) → Durable A
   commit : (at : ℕ) → (cont : Durable A) → Durable A
 
+-- A signing request (S8 U4, Q-S8-6 (a)): the key id, the leaf index and
+-- the message. The signer service takes it only from a checked program.
+data Request : Type where
+  request : (key : ℕ) → (leaf : ℕ) → (m : Digest) → Request
+
 -- A stream (S3, Q-S3-7 (a)): a cocell comonad with the observation head.
 codata Stream (A : Type 0) : Type where
   head : Stream A → A

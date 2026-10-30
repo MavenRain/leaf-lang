@@ -3,7 +3,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "front/check.h"
 #include "front/front.h"
@@ -20,40 +19,31 @@ static const char source[] =
   "finIndex : Fin 0 → Signer\nfinIndex i = value\n\n"
   "wrongResult : ℕ → ℕ\nwrongResult k = k\n";
 
+/* The writer writes into memory (S8 D2j). A refusal writes no byte: main
+   writes OUT only after exit 0. */
 static int writer_case(const char *name, int argc, int want) {
   Arena arena;
   Diag diag;
   Front front;
   Machine machine;
-  char path[] = "/tmp/leaf-zkml-review.XXXXXX";
   char *args[] = {"5", "6"};
-  int fd = mkstemp(path), ok = fd >= 0;
-  FILE *file;
-  char got[32] = {0};
-  if (!ok) return 0;
-  close(fd);
-  file = fopen(path, "wb");
-  if (file == NULL) { unlink(path); return 0; }
-  fputs("preserve", file);
-  ok = fclose(file) == 0;
+  char *data = NULL;
+  size_t size = 0;
+  int ok;
   arena_init(&arena, (size_t)1 << 28);
   diag_init(&diag);
-  ok = ok && front_load(&arena, "zkml-review", source, strlen(source), &front, &diag)
+  ok = front_load(&arena, "zkml-review", source, strlen(source), &front, &diag)
     && check_program(&arena, &front.decls, &machine, &diag);
   if (ok) {
-    int rc = zkml_command(&machine, name, args, argc, 2, path);
-    ok = rc == want && (want == 0 || (diag.code != NULL && strcmp(diag.code, "USAGE") == 0));
-    file = fopen(path, "rb");
-    if (file == NULL) ok = 0;
-    else {
-      size_t len = fread(got, 1, sizeof got - 1, file);
-      ok = fclose(file) == 0 && ok;
-      ok = ok && (want == 0 ? len > 8 && strncmp(got, "-- Generated", 12) == 0 : strcmp(got, "preserve") == 0);
-    }
+    FILE *zk_out = open_memstream(&data, &size);
+    int rc = zk_out == NULL ? 2 : zkml_command(&machine, name, args, argc, 2, zk_out);
+    if (zk_out != NULL && fclose(zk_out) != 0) rc = 2;
+    ok = zk_out != NULL && rc == want && (want == 0 || (diag.code != NULL && strcmp(diag.code, "USAGE") == 0));
+    ok = ok && (want == 0 ? size > 8 && strncmp(data, "-- Generated", 12) == 0 : size == 0);
   }
   if (!ok) fprintf(stderr, "FAIL zkml writer %s argc %d: %s\n", name, argc, diag.code == NULL ? "unexpected result" : diag.code);
   arena_release(&arena);
-  unlink(path);
+  free(data);
   return ok;
 }
 

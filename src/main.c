@@ -8,6 +8,7 @@
 #include "front/front.h"
 #include "front/lower.h"
 #include "front/parser.h"
+#include "manifest.h"
 #include "target.h"
 #include "zkml.h"
 
@@ -22,7 +23,8 @@ typedef enum {
   CMD_FMT,
   CMD_SIGNER,
   CMD_VERIFIER,
-  CMD_ZKML
+  CMD_ZKML,
+  CMD_REBUILD
 } Command;
 
 typedef struct {
@@ -40,6 +42,9 @@ typedef struct {
   int entry2;
   HashBinding hash;
   unsigned count;
+  char **words; /* the words after langc (D2c) */
+  int word_count;
+  OutBuffer *keep; /* rebuild (D3e): not NULL: finish_output keeps the bytes here */
 } Options;
 
 static const struct {
@@ -55,6 +60,7 @@ static const struct {
   {"signer", CMD_SIGNER},
   {"verifier", CMD_VERIFIER},
   {"zkml", CMD_ZKML},
+  {"rebuild", CMD_REBUILD},
 };
 
 static int usage(FILE *err) {
@@ -66,7 +72,8 @@ static int usage(FILE *err) {
         "       langc fmt PROG\n"
         "       langc signer --height H -o OUT\n"
         "       langc verifier --height H --pk FILE [--entry 8141|4337] [--shim] -o OUT\n"
-        "       langc zkml --count N PROG NAME [ARGS...] -o OUT\n", err);
+        "       langc zkml --count N PROG NAME [ARGS...] -o OUT\n"
+        "       langc rebuild MANIFEST\n", err);
   return 2;
 }
 
@@ -204,6 +211,8 @@ static int parse_zkml_options(int argc, char **argv, Options *opt, Diag *diag) {
 
 static int parse_options(int argc, char **argv, Options *opt, Diag *diag) {
   memset(opt, 0, sizeof *opt);
+  opt->words = argv + 1;
+  opt->word_count = argc - 1;
   if (argc < 3 || !find_command(argv[1], &opt->command)) {
     return diag_fail(diag, "USAGE", NULL, "expected a command and a program path");
   }
@@ -214,6 +223,7 @@ static int parse_options(int argc, char **argv, Options *opt, Diag *diag) {
     case CMD_IR:
     case CMD_ABI:
     case CMD_FMT:
+    case CMD_REBUILD:
       if (opt->json && argc == 3) return diag_fail(diag, "USAGE", NULL, "check --json needs a program path");
       return argc == 3 + opt->json ? 1 : diag_fail(diag, "USAGE", NULL, "too many arguments");
     case CMD_EVAL:
@@ -245,10 +255,84 @@ static int read_source(Arena *arena, const char *path, char **out, size_t *len, 
   return 1;
 }
 
+/* The counts of the last line of `check --json` (print_progress). */
+static LawCounts progress_counts(const Front *front, const Machine *machine, int parsed, int typed) {
+  LawCounts counts;
+  size_t checked = machine->checked > front->domain_count ? machine->checked - front->domain_count : 0;
+  counts.done = front->lexed ? front->decls.count - front->domain_count : 0;
+  counts.count = counts.done + (size_t)(front->lexed && !parsed);
+  counts.ok = typed ? counts.count : parsed ? checked : 0;
+  return counts;
+}
+
+/* The manifest of OPT with SOURCES and LAWS (D2a). */
+static Manifest manifest_of(const Options *opt, const ManifestSource *sources, int source_count, LawCounts laws) {
+  Manifest m;
+  m.words = opt->words;
+  m.word_count = opt->word_count;
+  m.out_path = opt->out_path;
+  m.sources = sources;
+  m.source_count = source_count;
+  m.laws = laws;
+  return m;
+}
+
+/* D2f for signer and verifier: the counts of the domain text. They load the
+   domain with an empty program. */
+static int domain_counts(Arena *arena, LawCounts *counts, Diag *diag) {
+  Front front;
+  Machine machine;
+  memset(&front, 0, sizeof front);
+  memset(&machine, 0, sizeof machine);
+  if (!front_load(arena, "<domain>", "", 0, &front, diag)) return 0;
+  if (!check_program(arena, &front.decls, &machine, diag)) return 0;
+  counts->done = front.domain_count;
+  counts->count = front.domain_count;
+  counts->ok = front.domain_count;
+  return 1;
+}
+
+/* D2j: the writer wrote the output into BUF and gave STATUS. With status 0,
+   writes OUT and then OUT.manifest.json from the same bytes; else neither.
+   D3e: with OPT->keep (rebuild), status 0 moves the bytes into OPT->keep,
+   and no file is written. */
+static int finish_output(const Options *opt, const Manifest *m, OutBuffer *buf, int status, Diag *diag) {
+  int closed = out_buffer_close(buf);
+  if (opt->keep != NULL && closed && status == 0) {
+    *opt->keep = *buf;
+    return 0;
+  }
+  ManifestStatus written = closed && status == 0 ? manifest_write(m, buf->data, buf->size) : MANIFEST_OK;
+  out_buffer_free(buf);
+  if (status != 0) return status;
+  if (!closed) return diag_fail(diag, "IO", NULL, "cannot write '%s'", m->out_path) + 2;
+  switch (written) {
+    case MANIFEST_OK:
+      return 0;
+    case MANIFEST_USAGE:
+      return diag_fail(diag, "USAGE", NULL, "a word or a path has a byte below 0x20") + 2;
+    case MANIFEST_NO_MEMORY:
+      return diag_fail(diag, "OOM", NULL, "no memory for the manifest of '%s'", m->out_path) + 2;
+    case MANIFEST_OUT_IO:
+      return diag_fail(diag, "IO", NULL, "cannot write '%s'", m->out_path) + 2;
+    case MANIFEST_FILE_IO:
+      return diag_fail(diag, "IO", NULL, "cannot write '%s.manifest.json'", m->out_path) + 2;
+  }
+  return 2;
+}
+
+/* langc zkml: the writer writes into memory, then OUT and the manifest. */
+static int run_zkml(const Options *opt, Machine *machine, const Manifest *m, Diag *diag) {
+  OutBuffer buf;
+  if (!out_buffer_open(&buf)) return diag_fail(diag, "IO", NULL, "cannot write '%s'", opt->out_path) + 2;
+  int status = zkml_command(machine, opt->entry, opt->args, opt->arg_count, opt->count, buf.file);
+  return finish_output(opt, m, &buf, status, diag);
+}
+
 /* Lowers the entries, then runs the ir, abi or build command. */
-static int run_target(const Options *opt, Machine *machine, Diag *diag) {
+static int run_target(const Options *opt, Machine *machine, const Manifest *m, Diag *diag) {
   IrProgram prog;
-  FILE *out;
+  OutBuffer buf;
   size_t i;
   int ok = 1;
   if (!lower_program(machine, &prog)) return 1;
@@ -264,26 +348,31 @@ static int run_target(const Options *opt, Machine *machine, Diag *diag) {
     case CMD_BUILD:
     case CMD_FMT:
     case CMD_VERIFIER:
+    case CMD_REBUILD:
     case CMD_SIGNER:
     case CMD_ZKML:
       break;
   }
-  out = fopen(opt->out_path, "wb");
-  if (out == NULL) return diag_fail(diag, "IO", NULL, "cannot write '%s'", opt->out_path) + 1;
-  ok = target_write(&prog, opt->runtime ? TARGET_PART_RUNTIME : TARGET_PART_MAIN, out, stderr);
-  return fclose(out) == 0 && ok ? 0 : 1;
+  if (!out_buffer_open(&buf)) return diag_fail(diag, "IO", NULL, "cannot write '%s'", opt->out_path) + 2;
+  ok = target_write(&prog, opt->runtime ? TARGET_PART_RUNTIME : TARGET_PART_MAIN, buf.file, stderr);
+  return finish_output(opt, m, &buf, ok ? 0 : 1, diag);
 }
 
-/* Writes the signer module (D23). It reads no program. */
-static int run_signer(const Options *opt, Diag *diag) {
-  FILE *out = fopen(opt->out_path, "wb");
-  if (out == NULL) return diag_fail(diag, "IO", NULL, "cannot write '%s'", opt->out_path) + 1;
-  int ok = target_write_signer(opt->height, out, stderr);
-  return fclose(out) == 0 && ok ? 0 : 1;
+/* Writes the signer module (D23). It reads no program; the manifest has
+   the domain text (D2d, D2f). */
+static int run_signer(const Options *opt, Arena *arena, Diag *diag) {
+  ManifestSource domain = {"<domain>", domain_source, domain_source_len};
+  LawCounts laws;
+  OutBuffer buf;
+  if (!domain_counts(arena, &laws, diag)) return 1;
+  if (!out_buffer_open(&buf)) return diag_fail(diag, "IO", NULL, "cannot write '%s'", opt->out_path) + 2;
+  int ok = target_write_signer(opt->height, buf.file, stderr);
+  Manifest m = manifest_of(opt, &domain, 1, laws);
+  return finish_output(opt, &m, &buf, ok ? 0 : 1, diag);
 }
 
 /* D13: the pk FILE is the 72 bytes of a Wasm signer publicKey block. */
-static int run_verifier(const Options *opt, Diag *diag) {
+static int run_verifier(const Options *opt, Arena *arena, Diag *diag) {
   unsigned char pk[73];
   FILE *in = fopen(opt->pk_path, "rb");
   if (in == NULL) return diag_fail(diag, "IO", NULL, "cannot read '%s'", opt->pk_path) + 1;
@@ -291,11 +380,16 @@ static int run_verifier(const Options *opt, Diag *diag) {
   if (fclose(in) != 0 || got != 72) {
     return diag_fail(diag, "IO", NULL, "the pk file '%s' is not 72 bytes", opt->pk_path) + 1;
   }
-  FILE *out = fopen(opt->out_path, "wb");
-  if (out == NULL) return diag_fail(diag, "IO", NULL, "cannot write '%s'", opt->out_path) + 1;
+  LawCounts laws;
+  OutBuffer buf;
+  if (!domain_counts(arena, &laws, diag)) return 1;
+  if (!out_buffer_open(&buf)) return diag_fail(diag, "IO", NULL, "cannot write '%s'", opt->out_path) + 2;
   VerifierMode entry1 = opt->shim ? VERIFIER_SHIM : VERIFIER_REAL;
-  int ok = target_write_verifier(opt->height, pk, opt->entry2 ? VERIFIER_4337 : entry1, out, stderr);
-  return fclose(out) == 0 && ok ? 0 : 1;
+  int ok = target_write_verifier(opt->height, pk, opt->entry2 ? VERIFIER_4337 : entry1, buf.file, stderr);
+  /* The rebuild needs the key (D2d). */
+  ManifestSource sources[2] = {{"<domain>", domain_source, domain_source_len}, {opt->pk_path, pk, 72}};
+  Manifest m = manifest_of(opt, sources, 2, laws);
+  return finish_output(opt, &m, &buf, ok ? 0 : 1, diag);
 }
 
 static int run(const Options *opt, Arena *arena, Diag *diag) {
@@ -306,21 +400,24 @@ static int run(const Options *opt, Arena *arena, Diag *diag) {
   if (!front_load(arena, opt->prog_path, text, len, &front, diag)) return 1;
   Machine machine;
   if (!check_program(arena, &front.decls, &machine, diag)) return 1;
+  ManifestSource source = {opt->prog_path, (const unsigned char *)text, len};
+  Manifest m = manifest_of(opt, &source, 1, progress_counts(&front, &machine, 1, 1));
   switch (opt->command) {
     case CMD_EVAL:
       return eval_command(&machine, opt->hash, opt->entry, opt->args, opt->arg_count, stdout, stderr);
     case CMD_ZKML:
-      return zkml_command(&machine, opt->entry, opt->args, opt->arg_count, opt->count, opt->out_path);
+      return run_zkml(opt, &machine, &m, diag);
     case CMD_CHECK: /* run_check does check */
     case CMD_IR:
     case CMD_ABI:
     case CMD_BUILD:
     case CMD_FMT: /* run_fmt does fmt */
+    case CMD_REBUILD: /* run_rebuild does rebuild */
     case CMD_SIGNER: /* run_signer writes the signer */
     case CMD_VERIFIER: /* run_verifier writes the verifier */
       break;
   }
-  return run_target(opt, &machine, diag);
+  return run_target(opt, &machine, &m, diag);
 }
 
 /* The span of declaration D. A domain declaration is in domain/domain.lang. */
@@ -395,12 +492,9 @@ static void noncanon(Arena *arena, const char *path, const char *text, size_t le
    one; after a lex failure, 0. The use count runs in the same pass as
    the types, so `affine` is the `typed` count (Q-S3-9 (a)). */
 static void print_progress(const Front *front, const Machine *machine, int parsed, int typed, FILE *out) {
-  size_t done = front->lexed ? front->decls.count - front->domain_count : 0;
-  size_t count = done + (size_t)(front->lexed && !parsed);
-  size_t checked = machine->checked > front->domain_count ? machine->checked - front->domain_count : 0;
-  size_t ok = typed ? count : parsed ? checked : 0;
-  fprintf(out, "{\"parsed\":\"%zu of %zu\",\"typed\":\"%zu of %zu\",\"affine\":\"%zu of %zu\",\"laws\":\"0 of 0\"}\n",
-          done, count, ok, count, ok, count);
+  LawCounts counts = progress_counts(front, machine, parsed, typed);
+  manifest_print_laws(&counts, out);
+  fputc('\n', out);
 }
 
 /* `check` in both modes: the error (at most one), then the W_NONCANON
@@ -454,6 +548,122 @@ static int run_fmt(const Options *opt, Arena *arena, Diag *diag) {
   return 0;
 }
 
+/* D3e: the first word and the -o of a writer run again. */
+static char REBUILD_LANGC[] = "langc";
+static char REBUILD_OUT_FLAG[] = "-o";
+
+/* D3c step 4: 0 when the keccak256 of source I of R now is the manifest
+   value. `<domain>` is the embedded domain text. */
+static int rebuild_source(const ManifestRead *r, int i, Arena *arena, Diag *diag) {
+  char hex[MANIFEST_HASH_CHARS];
+  char *text = NULL;
+  size_t len = 0;
+  /* Only the first source of signer/verifier is embedded. A user program
+     or a public-key file can also be named "<domain>". */
+  int domain = i == 0 && strcmp(r->source_paths[i], "<domain>") == 0 &&
+               (strcmp(r->words[0], "signer") == 0 || strcmp(r->words[0], "verifier") == 0);
+  if (!domain && !read_source(arena, r->source_paths[i], &text, &len, diag)) return 2;
+  manifest_keccak_hex(domain ? domain_source : (const unsigned char *)text, domain ? domain_source_len : len, hex);
+  if (strcmp(hex, r->source_hashes[i]) == 0) return 0;
+  return diag_fail(diag, "REFUSE_REBUILD_SOURCE", NULL, "the keccak256 of '%s' is %s, not the manifest value %s",
+                   r->source_paths[i], hex, r->source_hashes[i]) + 1;
+}
+
+/* D3c step 5: the writer diagnostic comes first on stderr, then the refusal. */
+static int rebuild_writer_failed(const char *manifest, int status, Diag *diag) {
+  if (diag->set) diag_print(diag, stderr);
+  diag_init(diag);
+  return diag_fail(diag, "REFUSE_REBUILD_WRITER", NULL, "the command of '%s' gives exit %d", manifest, status) + 1;
+}
+
+/* D3c step 6: 1 when the file PATH holds the SIZE bytes of DATA, 0 when it
+   holds other bytes, -1 when it cannot be read. */
+static int file_holds(const char *path, const char *data, size_t size) {
+  unsigned char chunk[4096];
+  FILE *file = fopen(path, "rb");
+  if (file == NULL) return -1;
+  size_t at = 0;
+  size_t got = 0;
+  int same = 1;
+  do {
+    got = fread(chunk, 1, sizeof chunk, file);
+    same = same && got <= size - at && memcmp(chunk, data + at, got) == 0;
+    at += same ? got : 0;
+  } while (same && got == sizeof chunk);
+  int error = ferror(file);
+  fclose(file);
+  return error ? -1 : same && at == size;
+}
+
+/* D3c steps 5 to 7: runs the words of R again with -o OUT into memory
+   (D3e), then compares the bytes with `output` and with the file OUT. */
+static int rebuild_output(const char *manifest, const ManifestRead *r, Arena *arena, Diag *diag) {
+  int argc = r->word_count + 3;
+  void *mem = arena_alloc(arena, (size_t)(argc + 1) * sizeof(char *));
+  char **argv = mem;
+  if (argv == NULL) return diag_fail(diag, "OOM", NULL, "no memory for the command of '%s'", manifest) + 2;
+  argv[0] = REBUILD_LANGC;
+  memcpy(argv + 1, r->words, (size_t)r->word_count * sizeof(char *));
+  argv[argc - 2] = REBUILD_OUT_FLAG;
+  argv[argc - 1] = r->out_path;
+  argv[argc] = NULL;
+  Options w;
+  OutBuffer kept = {NULL, NULL, 0};
+  if (!parse_options(argc, argv, &w, diag)) return rebuild_writer_failed(manifest, 2, diag);
+  w.keep = &kept;
+  int status = w.command == CMD_SIGNER     ? run_signer(&w, arena, diag)
+               : w.command == CMD_VERIFIER ? run_verifier(&w, arena, diag)
+                                           : run(&w, arena, diag);
+  if (status != 0) return rebuild_writer_failed(manifest, status, diag);
+  char hex[MANIFEST_HASH_CHARS];
+  size_t size = kept.size;
+  manifest_keccak_hex((const unsigned char *)kept.data, size, hex);
+  int same = size == r->out_size && strcmp(hex, r->out_hash) == 0;
+  int held = same ? file_holds(r->out_path, kept.data, size) : 0;
+  out_buffer_free(&kept);
+  if (held < 0) return diag_fail(diag, "IO", NULL, "cannot read '%s'", r->out_path) + 2;
+  if (!same) {
+    return diag_fail(diag, "REFUSE_REBUILD_OUTPUT", NULL, "the rebuild of '%s' is %zu bytes, %s; the manifest has %zu bytes, %s",
+                     r->out_path, size, hex, r->out_size, r->out_hash) + 1;
+  }
+  if (!held) return diag_fail(diag, "REFUSE_REBUILD_OUTPUT", NULL, "'%s' does not hold the bytes of the rebuild", r->out_path) + 1;
+  printf("rebuild: %s matches (%zu bytes, %s)\n", r->out_path, size, hex);
+  return 0;
+}
+
+/* D3c steps 2 to 7 for the manifest R of the file MANIFEST. */
+static int rebuild_checks(const char *manifest, const ManifestRead *r, Arena *arena, Diag *diag) {
+  int i;
+  int status = 0;
+  if (strcmp(r->commit, "unknown") == 0 || strcmp(r->commit, langc_commit) != 0) {
+    return diag_fail(diag, "REFUSE_REBUILD_COMMIT", NULL, "'%s' has the langc commit %s, and this langc has %s",
+                     manifest, r->commit, langc_commit) + 1;
+  }
+  if (r->dirty) return diag_fail(diag, "REFUSE_REBUILD_DIRTY", NULL, "'%s' is from a langc of a tree with a change", manifest) + 1;
+  if (langc_dirty) return diag_fail(diag, "REFUSE_REBUILD_DIRTY", NULL, "this langc is from a tree with a change") + 1;
+  for (i = 0; i < r->source_count && status == 0; i++) status = rebuild_source(r, i, arena, diag);
+  return status != 0 ? status : rebuild_output(manifest, r, arena, diag);
+}
+
+/* D3: `langc rebuild MANIFEST`, in the D3c order. OPT->prog_path is MANIFEST. */
+static int run_rebuild(const Options *opt, Arena *arena, Diag *diag) {
+  char *text = NULL;
+  size_t len = 0;
+  ManifestRead r;
+  if (!read_source(arena, opt->prog_path, &text, &len, diag)) return 2;
+  switch (manifest_read(text, len, &r)) {
+    case MANIFEST_READ_OK:
+      break;
+    case MANIFEST_READ_SHAPE:
+      return diag_fail(diag, "REFUSE_REBUILD_MANIFEST", NULL, "'%s' is not one manifest line (D2a)", opt->prog_path) + 1;
+    case MANIFEST_READ_NO_MEMORY:
+      return diag_fail(diag, "OOM", NULL, "no memory for '%s'", opt->prog_path) + 2;
+  }
+  int status = rebuild_checks(opt->prog_path, &r, arena, diag);
+  manifest_read_free(&r);
+  return status;
+}
+
 int main(int argc, char **argv) {
   Diag diag;
   diag_init(&diag);
@@ -466,8 +676,9 @@ int main(int argc, char **argv) {
   arena_init(&arena, ARENA_LIMIT_BYTES);
   int status = opt.command == CMD_FMT        ? run_fmt(&opt, &arena, &diag)
                : opt.command == CMD_CHECK    ? run_check(&opt, &arena, &diag)
-               : opt.command == CMD_SIGNER   ? run_signer(&opt, &diag)
-               : opt.command == CMD_VERIFIER ? run_verifier(&opt, &diag)
+               : opt.command == CMD_SIGNER   ? run_signer(&opt, &arena, &diag)
+               : opt.command == CMD_VERIFIER ? run_verifier(&opt, &arena, &diag)
+               : opt.command == CMD_REBUILD  ? run_rebuild(&opt, &arena, &diag)
                                              : run(&opt, &arena, &diag);
   arena_release(&arena);
   /* run_check prints its own diagnostics. */

@@ -1,0 +1,22 @@
+-- The signer service requests (S8 D4, the service rows of test/gate.sh):
+-- values of the domain type Request (Q-S8-6 (a)). req is the good request
+-- of the key 7 at the leaf index 0. wrongKey names the key 8, so after a
+-- keygen 7 the service refuses it with REFUSE_SIGN_REQUEST.
+-- skipLeaf names the leaf 5, above the next leaf index of key 7 (S8 D5).
+-- pastHeight names the leaf 16 = 2^4: an h = 4 key has no such leaf (S8 D5).
+-- fnReq is a function to a Request, not a Request: eval prints "fun n =>"
+-- before the request text, so the service refuses it.
+req : Request
+req = request 7 0 (digest 13 14 15 16)
+
+wrongKey : Request
+wrongKey = request 8 1 (digest 13 14 15 16)
+
+skipLeaf : Request
+skipLeaf = request 7 5 (digest 13 14 15 16)
+
+pastHeight : Request
+pastHeight = request 7 16 (digest 13 14 15 16)
+
+fnReq : (n : ℕ) → Request
+fnReq = λ (n : ℕ) → request 7 1 (digest 13 14 15 16)

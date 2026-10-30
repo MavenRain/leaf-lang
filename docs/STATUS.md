@@ -714,3 +714,147 @@ output, out of `make check`, kills them (Q-S7-15 (a)).
   zkml output has a zkml-lang check only, and no eval of the L7
   entry. The 6 known-answer evals use 569 to 871 MiB max RSS.
 - S7 does not change the open items of S6.
+
+## S8: boundary exclusion: service mode, manifests, rebuild
+
+S8 adds the boundary exclusion of the S8 row of the plan (Q-S8-1 to
+Q-S8-6). The signer service signs only a request that a checked
+program gives. Each writer output gets a manifest, and `langc
+rebuild` runs the writer again and compares the bytes.
+
+- Manifests (Q-S8-2 (a)): each writer (`build`, `signer`, `verifier`,
+  `zkml`) writes OUT and a sidecar file `OUT.manifest.json` with a
+  fixed key order and fixed bytes. The manifest holds the command and
+  its flags, the source path and its keccak256 (the embedded domain
+  text when there is no PROG), the langc commit and the dirty flag,
+  the law counts of `check --json`, and the output size and keccak256
+  (O31). Each writer writes into memory first. After a writer failure,
+  langc writes neither file.
+- Version (Q-S8-3 (a)): the Makefile writes build/version.c from `git
+  rev-parse HEAD` and a dirty flag (`git status --porcelain` is not
+  empty). A manifest from a langc of a tree with a change records
+  dirty true (O30).
+- `langc rebuild MANIFEST` (Q-S8-4 (a)): it checks the langc commit,
+  the dirty flags and the source hash. Then it runs the writer again
+  in memory and compares the new output with the `output` entry of the
+  manifest and with OUT, byte for byte. A difference gives exit 1 and
+  a `REFUSE_REBUILD_*` code. A match gives exit 0 and one line
+  `rebuild: OUT matches (SIZE bytes, KECCAK)`.
+- `REFUSE_REBUILD_DIRTY` (Q-S8-5 (a), S8 D6): `langc rebuild` refuses
+  a manifest with dirty true, with the message "is from a langc of a
+  tree with a change". It also refuses a manifest when this langc is
+  from a tree with a change, with the message "this langc is from a
+  tree with a change".
+- src/manifest.c and src/manifest.h: the manifest writer, the output
+  buffer of the writers and the one `laws` format of `check`.
+- Service mode (Q-S8-1 (a), Q-S8-6 (a), PLAN section 5.2):
+  test/run-wasm.mjs `FILE --service DIR`. A raw `sign` line is refused
+  with `REFUSE_RAW_SIGN`, with no module call and no state change. The
+  line `request PROG ENTRY` runs `langc check PROG`, then `langc eval
+  PROG ENTRY`, with no shell. ENTRY must give a value of the domain
+  type `Request`, `request KEY LEAF (digest W0 W1 W2 W3)`, else
+  `REFUSE_SIGN_REQUEST`. A LEAF below the next position of the key is
+  refused with `REFUSE_HIGH_WATER`, and a LEAF above it with
+  `REFUSE_SIGN_REQUEST`. The service uses the S5 state file, lock and
+  `commit` import (O29, O32).
+- domain/domain.lang: `data Request` with the constructor `request`
+  (Q-S8-6 (a)). Only the domain can declare `request` (R1). The
+  manifest source hashes of `signer` and `verifier` change with the
+  domain text (S8 D4).
+- test/wasm/request.lang and test/wasm/request-shape.lang: the request
+  fixtures (req, wrongKey, skipLeaf, pastHeight, fnReq and shape).
+- docs/DIAGNOSTICS.md: the six `REFUSE_REBUILD_*` rows and the
+  `REFUSE_RAW_SIGN` and `REFUSE_SIGN_REQUEST` rows, each with a "no
+  fixture:" reason.
+
+### Gate rows (`make check`)
+
+test/gate.sh has the S8 rows. The full list is in test/gate.sh.
+
+- manifests, 23 rows: `manifest_ok` checks the manifest of each `langc
+  build` row, of the signer at h = 4 and h = 10, of the real verifier
+  (sources `<domain>` and pk4.bin) and of the zkml row. One row writes
+  a 0x01 byte in OUT: exit 2 and no file (S8 D2i). The rows need cast
+  on the PATH for keccak256. With no cast, the gate gives a FAIL row.
+- rebuilds, 9 rows (Q-S8-5 (a)): the refusals of `langc rebuild` on a
+  tree with a change. DIRTY (the manifest of a `build` of the first
+  example), the two DIRTY messages (S8 D6: the manifest, and a copy
+  with `"dirty":false`), COMMIT (40 zeros), MANIFEST (no end newline;
+  `check` as the first word), IO (a missing MANIFEST, exit 2) and
+  USAGE (no MANIFEST; two MANIFEST words).
+- service, 10 rows (S8 D4, D5): the good request, the same request
+  again (`REFUSE_HIGH_WATER`), a raw `sign` line (`REFUSE_RAW_SIGN`),
+  a program with an affine reuse (`REFUSE_AFFINE_REUSE`), an ENTRY of
+  type ℕ (shape), a request for another key (wrongKey), a LEAF above
+  the next position (skipLeaf), LEAF 2^4 at h = 4 (pastHeight), a PROG
+  that langc cannot read (exit 2) and an ENTRY of a function type to
+  `Request` (fnReq). `langc eval` prints `fun n => ` before the
+  request text of fnReq, so the service refuses it.
+- The S8 gate: `make check` EXIT 0, gate 0 failures, service 10
+  checked, manifests 23 checked, rebuilds 9 checked, verifier ABI
+  regressions 9 passed, zkml writer regressions 7 passed. The other
+  counts are as in S7 (evals 205, check refusals 44, poseidon2 evals
+  7, zkml 1 checked).
+
+### Mutants
+
+There are 19 mutants. 14 are killed, 3 are EQUIVALENT, and 2 (B4 and
+B5) are not reached on a tree with a change. The names S1 to S10 (the
+service), B1 to B5 (rebuild) and C1 to C3 (the manifest) are mutant
+names, not stage names. Each mutant is an exact-match edit, then
+`make -B`, then the gate part with its check (the service rows, the
+rebuild rows or the full gate), then a restore (a copy and a compare).
+
+| Mutant | File | Edit | Killer |
+|---|---|---|---|
+| S1 | test/run-wasm.mjs | `&& service` is `&& false` (the raw sign check) | the raw `sign` row (exit 0, `4096 trap`) |
+| S2 | test/run-wasm.mjs | no key check | the wrongKey row (it signs) |
+| S3 | test/run-wasm.mjs | no height check | the pastHeight row (exit 0, `4096 trap`) |
+| S4 | test/run-wasm.mjs | `leaf > stateWord(1)` is `false` | the skipLeaf row (exit 0, `4096 trap`) |
+| S5 | test/run-wasm.mjs | `leaf < stateWord(1)` is `false` | the `REFUSE_HIGH_WATER` row (exit 0, `4096 trap`) |
+| S6 | test/run-wasm.mjs | no `next(ks);` | the good request row (exit 2, `4096 trap`) |
+| S7 | test/run-wasm.mjs | the request regex has no `^` | the fnReq row (exit 0, it signs) |
+| S8 | test/run-wasm.mjs | the request regex has no `\n$` | EQUIVALENT (below) |
+| S9 | test/run-wasm.mjs | `run.status === 2` is `false` | the nosuch row (exit 1) |
+| S10 | test/run-wasm.mjs | no `langcRun(["check", prog]);` | EQUIVALENT (below) |
+| ws | test/run-wasm.mjs | no `ws.some((w) => w >= 2n ** 64n)` test | EQUIVALENT (below) |
+| B1 | src/main.c | no commit compare | the COMMIT row (it gets `REFUSE_REBUILD_DIRTY`) |
+| B2 | src/main.c | `r->dirty` is 0 | the D6 manifest message row (it gets the langc message) |
+| B3 | src/main.c | `langc_dirty` is 0 | the D6 langc message row (exit 0 on the copy) |
+| B4 | src/main.c | no source compare | not reached (below) |
+| B5 | src/main.c | no byte compare | not reached (below) |
+| C1 | src/manifest.c | the langc keys are in a different order | 25 FAIL rows: the manifest rows |
+| C2 | src/manifest.c | the dirty flag is always false | the D6 manifest message row, as B2 |
+| C3 | src/manifest.c | the keccak256 of size - 1 bytes | 23 FAIL rows: the manifest rows |
+
+The EQUIVALENT mutants:
+
+- S8: with `^` kept, the line must start with `request N N (digest N
+  N N N)`. Only a closed value of type `Request` starts with the head
+  `request`, and only the newline comes after its full form. A partial
+  application prints as `fun _x0 => ...`, a wrapper prints its own
+  head first, and `REFUSE_NAME` (rule R4) stops a user name that is a
+  domain name.
+- S10: `langc eval` checks all the declarations of PROG before it
+  evaluates ENTRY, and it refuses the same programs with the same
+  code. The service keeps the `check` call, because the contract is
+  check, then eval (S8 D4).
+- ws: a computed word above 2^64 - 1 is a trap, not a word (for
+  example `natMul 4294967296 4294967296`). The eval prints `trap` in
+  its place, so the request regex refuses it with
+  `REFUSE_SIGN_REQUEST`. A literal above 2^64 - 1 is a
+  `LEX_NAT_RANGE` refusal of `check`. The ws check stays as a second
+  check.
+
+B4 and B5 are not reached on a tree with a change: the DIRTY refusal
+comes first. The clean-tree rows of Q-S8-5 (a) run them after the S8
+commit (S8 U6).
+
+### Open items from S8
+
+- O29, O30, O31 and O32 (docs/PLAN.md).
+- The clean-tree rows of `langc rebuild` (exit 0, SOURCE, WRITER and
+  OUTPUT) and the mutants B4 and B5 wait for a tree with no change,
+  after the S8 commit (Q-S8-5 (a), S8 U6). On a clean tree the DIRTY
+  row and the two D6 rows change.
+- S8 does not change the open items of S7.
