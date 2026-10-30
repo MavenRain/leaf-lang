@@ -1,0 +1,6 @@
+-- aggregate takes Fin n → Signer. A Fin 1 → ℕ argument is a type error.
+wrong : (i : Fin 1) → ℕ
+wrong i = 0
+
+bad : Bool
+bad = aggregate 1 wrong

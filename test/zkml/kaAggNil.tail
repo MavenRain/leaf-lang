@@ -1,0 +1,3 @@
+-- S7 U5j known answer kaAggNil (D10 form).
+def kaAggNil : Nat := aggregate nil
+

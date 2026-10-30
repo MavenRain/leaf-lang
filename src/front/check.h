@@ -22,6 +22,7 @@ int check_program(Arena *arena, const DeclList *decls, Machine *m, Diag *diag);
 int entry_of(Machine *m, const Value *type, Entry *out);
 /* Evaluates the definition NAME on ARGS and prints the result. Returns 0, 1
    after a diagnostic, or 2 after an EVAL_ARGS diagnostic. */
-int eval_command(Machine *m, const char *name, char *const *args, int arg_count, FILE *out, FILE *err);
+int eval_command(Machine *m, HashBinding hash, const char *name, char *const *args, int arg_count, FILE *out,
+                 FILE *err);
 
 #endif

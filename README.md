@@ -5,7 +5,7 @@ XMSS one-time leaves and verifies XMSS signatures. Each leaf is an affine
 resource: the checker refuses a program that can use one leaf two times.
 The host is TinyCC. The planned targets are an EVM account verifier
 (EIP-8141 VERIFY frame and ERC-4337), a Wasm signer with an EIP-8310
-keystore, and the zkml-lang Circuit IR for aggregation.
+keystore, and a zkml-lang program for aggregation.
 
 ## Status (S1)
 

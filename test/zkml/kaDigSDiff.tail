@@ -1,0 +1,7 @@
+-- S7 U5j known answer kaDigSDiff (D10 form).
+def kaWordsDiff : List Nat -> List Nat -> Nat := fun xs ys => natAdd (natAdd (natSub (listLen Nat xs) (listLen Nat ys)) (natSub (listLen Nat ys) (listLen Nat xs))) (fold (fun (h : Nat) (acc : Nat) => natAdd h acc) 0 (listZipWith Nat Nat Nat (fun (a : Nat) (b : Nat) => natAdd (natSub a b) (natSub b a)) xs ys))
+def kaSeed : List Nat := cons 81985529216486895 (cons 9141386507638288912 (cons 1229801703532086340 (cons 6148914691236517205 nil)))
+def kaDigIdx : List Nat := (cons 0 (cons 15 (cons 16 (cons 31 (cons 63 (cons 64 (cons 65 (cons 66 nil))))))))
+def kaDigSWant : List Nat := (cons 0 (cons 15 (cons 7 (cons 0 (cons 5 (cons 2 (cons 6 (cons 0 nil))))))))
+def kaDigSDiff : Nat := kaWordsDiff (map (fun (i : Nat) => wotsDigit kaSeed i) kaDigIdx) kaDigSWant
+

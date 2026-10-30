@@ -4,7 +4,7 @@ leaf-lang is a language for post-quantum accounts. A program signs with
 XMSS one-time leaves and verifies XMSS signatures. Each leaf is an affine
 resource: the checker refuses a program that can use one leaf two times.
 The host is TinyCC. The targets are an EVM account verifier, a Wasm signer
-and the zkml-lang Circuit IR.
+and a zkml-lang program (5.3).
 
 S1 status: the Agda-like surface, `langc fmt` and `langc check --json`
 are built on the tcc-wasm kit of lang-template. XMSS, WOTS+ and affine
@@ -28,7 +28,7 @@ USER rulings (2026-10-25, the request and AskUserQuestion; the words are in
 - R4 targets (3): the EVM account verifier (EIP-8141 VERIFY frame: XMSS
   verify, then APPROVE; and an ERC-4337 `validateUserOp` entry); the Wasm
   signer and keystore (keygen and sign, each one-time leaf an affine
-  resource, EIP-8310 commit-before-sign state); the zkml-lang Circuit IR
+  resource, EIP-8310 commit-before-sign state); a zkml-lang program
   (one proof of N XMSS verifies, the leanMultisig role). Not chosen: a C99
   signer library.
 - R5 hash: abstract, bound per target. The language has one opaque
@@ -191,6 +191,79 @@ session 1; the entries are in section 11):
   caller (5.1).
 - Q-S6-4: the gas script runs one real H = 16 keygen in the Wasm signer.
 
+USER rulings on the S7 questions (2026-10-28, AskUserQuestion in the S7
+sessions 1, 2 and 4):
+
+- Q10: (a) BabyBear. The Poseidon2 binding is over BabyBear (section 11).
+  O3 closes.
+- Q-S7-1: (a) the zkml target is a zkml-lang program, not a `Circuit`
+  term. The writer prints a zkml-lang source file: defs over the prelude
+  (field ops on `Nat` words, Poseidon2, `verify`, and the `aggregate`
+  statement as an entry). zkml-lang `langc check` and `langc build`
+  accept it, and the Wasm run gives the value. L7: that value equals the
+  leaf-lang `aggregate` value on each vector. zkml-lang does not change.
+  The output has no prover export (O26, 5.3).
+- Q-S7-2: (a) the Poseidon2 instance of Plonky3 rev 5fcf8d7c (the
+  zkml-lang lock). The vectors come from the tests of that crate and from
+  a cargo cross-check outside the sandbox, as `cast keccak` in S4 (5.4).
+- Q-S7-3: (a) the 5.4 byte layout and the 4-word `Digest` stay. A sponge
+  absorbs the bytes as injective field limbs, and the 8-element output
+  packs into `digest w0 w1 w2 w3` (5.4).
+- Q-S7-4: (a) the writer output is a fixed zkml-lang text plus data defs
+  (5.3).
+- Q-S7-5: (a) the Horizen Labs constants of Plonky3,
+  `default_babybear_poseidon2_16()` (baby-bear/src/poseidon2.rs:60-128)
+  (5.4).
+- Q-S7-6: (a) the cargo cross-check crate (outside the repository) can
+  fetch its crates from the network.
+- Q-S7-7 (2026-10-29): (a) `langc eval [--hash keccak|poseidon2] PROG
+  NAME [ARGS...]`. The flag comes before PROG (as `check --json`).
+  Keccak is the default. Another value gives USAGE and exit 2 (5.4).
+- Q-S7-8 (2026-10-29): (a) `aggregate` takes the count as a parameter,
+  `(n : Nat) -> (Fin n -> Signer) -> Bool`, with the domain def `Signer` =
+  `(pk : PubKey) * Digest * Sig (height pk)`: the PLAN type had a free `N`,
+  and `Sig` takes the height of the key.
+- Q-S7-9 (2026-10-29): (a) `langc zkml --count N PROG NAME [ARGS...] -o
+  OUT`. The writer evaluates `NAME ARGS k` under the Poseidon2 binding for
+  k = 0 to N - 1, and each value is a `Signer`. The L7 vector is `--count N
+  test/eval/laws.lang l7Entry BAD`.
+- Q-S7-10 (2026-10-29): (a) the fixed text of the writer is a zkml-lang
+  file in the repository, `zkml/xmss.lang`, and `gen/embed.c` embeds it in
+  `langc`. Before the fixed text, the writer prints the Poseidon2
+  constants defs from the C table `poseidon2_babybear16`, so the constants
+  have one source.
+- Q-S7-11 (2026-10-29): (a) `gen/embed.c` takes an optional third
+  argument NAME (`embed IN OUT [NAME]`, default `domain_source`), so one
+  generator embeds `domain/domain.lang` and `zkml/xmss.lang`. The old
+  calls give the same bytes.
+- Q-S7-12 (2026-10-29): (a) the Z check of `zkml/xmss.lang` ran out of
+  memory. Z ran each permutation on the neutral words of a signer, and
+  the cost grows with the depth of the hashes (8 chained `thNode` or an
+  ltree over 8 digests fill the arena). The sponge count in `p2Sponge`
+  adds `natMul 0 (p2At limbs 0)`. This term is 0 on known words, so the
+  value does not change. On neutral words the count is stuck, and the
+  check does not run the permutation. No Z change.
+- Q-S7-13 (2026-10-29): (a) the zkml output takes a parameter z. Each
+  data word is `natAdd z w`, and the entry is `def zkAggregate : Nat ->
+  Nat := fun z => aggregate (zkSigners z)` (D10). On a neutral z the Z
+  check does not run the permutation. Z has one arena of 1 GiB for a
+  run (the check, then the eval or the build), and it does not release
+  the arena between defs: about 5 to 9 hashes fill it. Thus the Z eval
+  and the Z build of the entry (about 600 hashes) run out of memory
+  (O28). No Z change.
+- Q-S7-14 (2026-10-29): (a) U6 adds the 6 Z known-answer evals as gate
+  rows in the zkml block (the rows are skipped when zkml-lang is not
+  there). kaPermZ, kaChain2Z and kaRoot2Z (z = 0), kaDigDiff and
+  kaDigSDiff give 0, and kaAggNil gives 1. Each eval fits the Z arena
+  (at most 871 MiB). The L7 run row of D6 waits on O28 (D11). The
+  leaf-lang L7 rows stay. No Z change.
+- Q-S7-15 (2026-10-29): (a) U7 runs 12 mutants on the S7 checks: on
+  zkml/xmss.lang and src/zkml.c (the zkml block of the gate kills them,
+  or a detector of the writer data words for the 2 sites that no gate
+  row reads), on src/front/poseidon2.c (fronttool) and on src/main.c
+  (the `--hash sha3` row). `langc zkml` takes Nat ARGS only: 5.3 says
+  so, and the usage text does not change.
+
 Not ruled. The plan takes (a) for each of these:
 
 - Q2 kit: (a) by default; the USER did not rule it.
@@ -199,7 +272,6 @@ Not ruled. The plan takes (a) for each of these:
 - Q7 v1 parameters: (a) by default; the USER did not rule it.
 - Q8 on-chain one-time: (a) by default; the USER did not rule it.
 - Q9 Wasm crypto: (a) by default; the USER did not rule it.
-- Q10 zkml field: (a) by default; the USER did not rule it.
 - Q11 proofs: (a) by default; the USER did not rule it.
 - Q12 two signers: (a) by default; the USER did not rule it.
 - Q13 token counts: (a) by default; the USER did not rule it.
@@ -408,7 +480,7 @@ its type), law (a guest theorem, section 6).
 | `sigHash`, `txNonce` | target boundary (EVM) | the EIP-8141 signature hash and nonce, or the ERC-4337 `userOpHash` and nonce sequence | B2 | S6 |
 | `approve` | target boundary (EVM) | APPROVE (0xaa) when `accept` is true, else REVERT | B2 | S6 |
 | `commit` (interpretation) | target boundary (Wasm) | the host import `(import "env" "commit" (func (param i64 i64)))`, a key id and the new position (Q-S5-2 (c)); the key id is the host-chosen i64 of the signer `keygen` export, kept in the keystore state (Q-S5-4 (a)); the import writes the new position durably before it returns; only the signer exports call it (Q-S5-8 (a)); a program cannot build a `commit` node (Q-S5-7 (a)) | B4, R4 | S5 |
-| `aggregate` | defined | `(Fin N -> PubKey * Digest * Sig) -> Bool` = all `verify` | B1 (validators, leanMultisig role) | S7 |
+| `aggregate` | defined | `(n : Nat) -> (Fin n -> Signer) -> Bool` = all `verify`, with `Signer` = `(pk : PubKey) * Digest * Sig (height pk)` (Q-S7-8 (a)) | B1 (validators, leanMultisig role) | S7 |
 | L1 to L7 | law | section 6 | B1, B2, B4 | S4 to S7 |
 
 Readings:
@@ -698,22 +770,33 @@ Gas estimate for one verify (v1 hash of Q6 (a), n = 32, w = 16, so len =
   run-wasm.mjs signs and verifies at 3 positions, with no eval compare
   (Q-S5-11 (a), R1).
 
-### 5.3 zkml-lang Circuit IR
+### 5.3 zkml-lang program
 
 - A C writer prints the statement of `aggregate` as a zkml-lang source
-  file: a `Circuit` term with the public keys and messages public and the
-  signatures as witness. zkml-lang makes the backend output. `PIN` records
-  the zkml-lang commit (968dce4 at S0).
-- Keccak in a circuit is too costly, so this target needs the Poseidon2
-  binding. zkml-lang has BabyBear and BN254 and no Poseidon2; leanSig uses
-  KoalaBear (Q10, O3).
+  file (Q-S7-1 (a), Q-S7-4 (a)): a fixed text plus data defs. The fixed
+  text has the BabyBear field ops on `Nat` words, the Poseidon2
+  permutation with its constants as a def, the 5.4 sponge, the 4 hash
+  ops, the chain, the L-tree, the Merkle path, `verify` and the statement
+  as an entry. The data defs have the public keys, the messages and the
+  signatures (`langc eval` values).
+- `langc zkml` reads each ARG as a Nat: digits only, at most 19. An ARG
+  of another type (a Bool) gets a USAGE refusal (Q-S7-15 (a)).
+- The output is not a `Circuit` term: the zkml-lang `Circuit` IR has no
+  hash op, no gate that multiplies two witness values and no equality
+  constraint. zkml-lang does not change. zkml-lang `langc check` and
+  `langc build` accept the file, and the Wasm run gives the value (L7).
+  There is no prover export (O26). `PIN` records the zkml-lang commit
+  (968dce4 at S0).
+- Keccak in a circuit is too costly, so this target uses the Poseidon2
+  binding over BabyBear (Q10 (a)). zkml-lang has BabyBear and BN254 and
+  no Poseidon2 op. leanSig uses KoalaBear.
 - Port: zkpolicy-lang `src/zkml.c`, `src/zkml.h`, `src/zkml-names.h`.
 
 ### 5.4 Hash bindings and parameters
 
 | Op | `langc eval` | EVM | Wasm | zkml |
 |---|---|---|---|---|
-| `thChain`, `thNode`, `thMsg`, `prf` | Keccak-256 (`keccak.c`) | Keccak-256 (KECCAK256, 0x20) | Keccak-256 (code in the module) | Poseidon2 (S7) |
+| `thChain`, `thNode`, `thMsg`, `prf` | Keccak-256 (`keccak.c`); Poseidon2 by a flag (S7) | Keccak-256 (KECCAK256, 0x20) | Keccak-256 (code in the module) | Poseidon2 (S7) |
 
 v1 construction (Q6 (a)): `th(seed, tweak, x) = Keccak-256(seed || tweak ||
 x)`, one call per step (the SPHINCS+ "simple" shape). v1 parameters (Q7
@@ -741,6 +824,30 @@ Machine flag that `langc eval` sets). In `check` and in conversion they
 stay stuck, also on `digest` values, so no law can use a Keccak output
 (L6). `digestEq` and `digit` are not hash ops: they compute on `digest`
 values everywhere.
+
+Poseidon2 binding (S7; Q10 (a), Q-S7-2 (a), Q-S7-3 (a), Q-S7-5 (a)). The
+permutation is `Poseidon2BabyBear<16>` of Plonky3 rev 5fcf8d7c: p =
+0x78000001 (2^31 - 2^27 + 1), width 16, S-box x^7, 4 + 4 external rounds
+and 13 internal rounds, and the Horizen Labs constants
+(`default_babybear_poseidon2_16()`, baby-bear/src/poseidon2.rs:60-128).
+`src/front/poseidon2.c` has it in C. The sponge is
+`PaddingFreeSponge<Perm, 16, 8, 8>`: rate 8, overwrite mode, and the
+output is the first 8 state elements. Each 32-byte part of the layout
+above is 16 big-endian 16-bit limbs. Each limb is below p, so the map is
+injective. Each op has a fixed length, so there is no padding, and the
+prefixes above give the domain separation. Thus `thChain` and `prf` use
+6 permutations, `thNode` 8 and `thMsg` 10. The output e0..e7 (each below
+2^31) packs as `w_j = e_{2j} * 2^32 + e_{2j+1}`, `w0` first.
+`langc eval --hash poseidon2` selects the binding, and Keccak is the
+default (`--hash keccak` or no flag; Q-S7-7). The EVM verifier and the
+Wasm signer stay Keccak (O27). The Q-S4-3 (a) rule holds for both
+bindings (L6).
+
+Known answers (test/fronttool.c): (ii) the width-16 vector of Plonky3
+baby-bear/src/poseidon2.rs:315-333 (the constants come from
+`Xoroshiro128Plus` seed 1), and (i) two vectors of the Horizen Labs
+instance from a cargo tool at the same rev (on 0..15 and on the (ii)
+input). The sponge and op vectors come from the same cargo tool (S7).
 
 ## 6. Laws (guest terms)
 
@@ -814,7 +921,7 @@ SPEC.md section 2.1 gives the declaration forms (signature and clause,
 | intent-lang | 79e1898 | `src/front/check.c` REFUSE_CELL, cofamily, sealed family; PLAN 2.2 |
 | resolve-lang | 251c1ca | `src/front/check.c` REFUSE_CELL (second implementation) |
 | zkpolicy-lang | 1d263fb | kernel with HITs, Glue and `ua` (`src/front/{check,eval,lower}.c`); zkml writer `src/zkml.c` |
-| zkml-lang | 968dce4 | the Circuit IR (the target) |
+| zkml-lang | 968dce4 | the zkml-lang program target (5.3) |
 | agent-lang | 06854bf | `src/front/parser.c` JSON diagnostics |
 | dil-lang | 9e57528 | `src/front/{parser,check}.c` JSON diagnostics |
 | brisk | 24e3383 | the affine design (verdict lines 160..232) |
@@ -834,7 +941,7 @@ on the new checks, docs, close (stage, commit message, next prompt).
 | S4 | `Digest`, hash ops (opaque), WOTS+, L-tree, Merkle, `sign`, `verify`; reference Keccak in `langc eval`; L1, L6 | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 12; check refusals 38; evals 142; ir 10 lowered; wasm 13 modules valid; differential 773 cases, 0 mismatches; fmt 101 canonical, 6 non-canonical pairs (round trip and idempotence); json 33 fixtures, diagnostics 46 codes (31 with a fixture, 15 with no fixture); gate 0 failures; review and domain regressions passed; own vectors plus a cross-check of each hash op with `cast keccak` (Q-S4-1 (c)); L1 at h = 4 for i = 0 to 15 (test/eval/laws.lang); L6: three `check` rows refuse with `TYPE_REFL`; 10 mutants on the S4 checks, 10 of 10 killed (docs/STATUS.md, S4) |
 | S5 | `keygen`, `publicKey`, `next`, `commit`; Wasm signer (Keccak in the module, `commit` import, EIP-8310 JSON in the harness); L3 to L5 | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 12; check refusals 43; evals 162; ir 14 lowered; wasm 19 modules valid; differential 951 cases, 0 mismatches; signer 2 modules valid, 28 rows; fmt 115 canonical, 6 non-canonical pairs (round trip and idempotence); json 33 fixtures, diagnostics 49 codes (31 with a fixture, 18 with no fixture); gate 0 failures; review and domain regressions passed; Keccak known answers in the module (test/ir/hashkat.lang); the h = 4 signer against `langc eval` (`rootSum`, `sigSum` and `verify` at the positions 0, 7 and 15); reset refused (`REFUSE_HIGH_WATER`); at h = 10 the module signs and verifies; L1 (keystore form), L3 to L5 as eval rows at h = 4 and refusal fixtures (Q-S5-10); 11 mutants on src/wasm.c, 10 killed, M6 height a known survivor (Q-S5-40 (a)) (docs/STATUS.md, S5) |
 | S6 | EVM verifier: ERC-4337 entry, EIP-8141 entry with the shim, nonce binding L2; measured gas | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 12; check refusals 43; evals 195; ir 14 lowered; wasm 19 modules valid; differential 951 cases, 0 mismatches; signer 2 modules valid, 95 rows; verifier ABI regressions 9 passed; fmt 115 canonical, 6 non-canonical pairs (round trip and idempotence); json 33 fixtures, diagnostics 49 codes (31 with a fixture, 18 with no fixture); gate 0 failures; review and domain regressions passed; `langc verifier` at h = 4 in `evm run`: the shim and entry 2 accept the 16 positions; a wrong nonce, a wrong message, a wrong root or a changed byte is refused (the shim reverts, entry 2 gives the word 1); the shim build is the real entry 1 build with the 5 table parts in the shim form (a byte compare; no EVM with EIP-8141, O2); L2 as the `accept` eval rows; `make gas` rows at H = 4, 10 and 16 (shim and entry 2; not in `make check`, Q-S6-8 (b)); 8 mutants on src/evm.c, 8 of 8 killed (docs/STATUS.md, S6) |
-| S7 | Poseidon2 binding (field of Q10) in `langc eval` and the zkml writer; `aggregate`; L7 | zkml-lang accepts the output; Poseidon2 vectors |
+| S7 | Poseidon2 binding (field of Q10) in `langc eval` and the zkml writer; `aggregate`; L7 | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 12; check refusals 44; evals 205; poseidon2 evals 7 (the L1 rows at h = 4, L7 at N = 1, the `--hash sha3` USAGE row); zkml 1 checked (zkml-lang accepts the `langc zkml` output of the L7 entry at N = 1); zkml known answers 6 evals (Q-S7-14 (a)); ir 14 lowered; wasm 19 modules valid; differential 951 cases, 0 mismatches; signer 2 modules valid, 95 rows; verifier ABI regressions 9 passed; fmt 116 canonical, 6 non-canonical pairs (round trip and idempotence); json 33 fixtures, diagnostics 49 codes (31 with a fixture, 18 with no fixture); gate 0 failures; review, signer persistence and domain regressions passed; fronttool: the Poseidon2 vectors of Plonky3 (the (ii) instance at seed 1, the (i) instance on 0..15 and on the (ii) input) and the 5.4 sponge digests on 96, 128 and 160 bytes; 12 mutants on zkml/xmss.lang, src/zkml.c, src/front/poseidon2.c and src/main.c, 12 of 12 killed, 2 of them by a data word check out of `make check` (docs/STATUS.md, S7) |
 | S8 | boundary exclusion: the signer service takes programs only; output manifests; rebuild compare | refusal tests; byte-identical rebuild |
 | S9 | agent kit: `SKILL.md`, grammar card, 5 graded examples, `langc mcp`, `langc explain`, `TOKEN-BASELINE.md`, final `AGENTS.md` | MCP stdio test; examples pass `check` |
 | S10 | close: `docs/STATUS.md`, `docs/VALIDATION.md`, full gate, mutant summary | full gate EXIT 0 |
@@ -847,8 +954,8 @@ on the new checks, docs, close (stage, commit message, next prompt).
   (last check: S6 U4, 2026-10-28).
 - O2: the kit EVM harness has no EIP-8141. Entry 1 is tested through a
   shim until an EVM with EIP-8141 exists.
-- O3: Poseidon2 field. zkml-lang has BabyBear and BN254. leanSig uses
-  KoalaBear. Q10 picks.
+- O3: CLOSED (Q10 (a), 2026-10-28). The Poseidon2 field is BabyBear.
+  zkml-lang has BabyBear and BN254. leanSig uses KoalaBear.
 - O4: XMSS^MT or generalized XMSS for the leanSig lifetime 2^32.
 - O5: two signers on one key (EIP-8310 reserved leaf ranges, an affine
   `split`). Q12.
@@ -900,6 +1007,19 @@ on the new checks, docs, close (stage, commit message, next prompt).
 - O24: the EIP-8141 SENDER frame. Entry 1 has only the VERIFY frame
   (D12).
 - O25: deployment of the verifier code (D12).
+- O26: the zkml output is a zkml-lang program, not a `Circuit` term, and
+  it has no prover export (Q-S7-1 (a), 5.3). A proof of `aggregate` needs
+  a hash op in the zkml-lang `Circuit` IR or a prover for the program.
+- O27: the Wasm signer has no Poseidon2. In v1 only `langc eval` makes a
+  signature under the Poseidon2 binding, for aggregation (5.4).
+- O28: the Z arena (1 GiB for a run, not released between defs) holds
+  about 5 to 9 Poseidon2 hashes. `langc eval` and `langc build` of the
+  zkml entry run out of memory, so the zkml output has a Z check only
+  (Q-S7-13 (a)). A fix needs a Z change (Q-S7-1 (a)). The measures: a
+  Z eval of the D10 form fits 2 chain steps and a root of h = 2, and it
+  does not fit 5 steps and a root of h = 4 (Session 59). The 6 Z
+  known-answer evals of the gate (Q-S7-14 (a)) use 569 to 871 MiB max
+  RSS (Session 63).
 
 ## 11. Questions for the USER
 
@@ -935,7 +1055,7 @@ not rule it (section 1).
   write).
 - Q9 Wasm crypto. DEFAULT (a). (a) Keccak in the module; `commit` is the
   one host import. (b) a host-import crypto ABI.
-- Q10 zkml field. DEFAULT (a). (a) Poseidon2 over BabyBear (zkml-lang has
+- Q10 zkml field. RULED (a). (a) Poseidon2 over BabyBear (zkml-lang has
   it). (b) add KoalaBear to zkml-lang first (leanSig parameters).
 - Q11 proofs. DEFAULT (a). (a) guest only; no Lean export. (b) a Lean
   export in a later slice.

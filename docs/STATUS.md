@@ -620,3 +620,97 @@ mean:
 The floor (109001.2) is less than standard + execution (139645.3), so
 tx does not use the floor (O10). The measured execution gas is
 approximately 1.7 times the plan estimate (about 55k).
+
+## S7: Poseidon2 binding and zkml writer
+
+S7 adds the Poseidon2 binding of PLAN section 5.4 and the zkml writer
+of PLAN section 5.3. The binding uses Poseidon2 over BabyBear at width
+16, the Plonky3 instance (Q10). The writer gives a zkml-lang program
+for `aggregate`, not a `Circuit` term (Q-S7-1 (a), O26).
+
+- `langc eval [--hash keccak|poseidon2] PROG NAME [ARGS...]`: the
+  eval uses the hash binding of `--hash` (Q-S7-7 (a)). A different hash
+  name is a `USAGE` refusal.
+- `langc zkml --count N PROG NAME [ARGS...] -o OUT` writes the
+  zkml-lang program for the def NAME at N entries, N from 1 to 64
+  (D9). Each ARG is a Nat (5.3). A bad argument is a `USAGE` refusal.
+- src/front/poseidon2.c and src/front/poseidon2.h: the permutation
+  and the sponge on the limbs of the input (5.4).
+- src/zkml.c and src/zkml.h: the writer. The output has the Poseidon2
+  constants, zkml/xmss.lang and the data defs of the entries.
+- zkml/xmss.lang: the verify in zkml-lang: the permutation, the
+  sponge, the WOTS+ digits, the chains, the root from the auth path
+  and `aggregate`.
+- domain/domain.lang: `Signer`, `signerOk` and `aggregate` (PLAN 3.2,
+  Q-S7-8 (a)).
+- L7 in the guest: the `l7` defs and their eval rows at h = 4
+  (test/eval/laws.lang, test/eval/expect.txt, D6).
+
+### Gate rows (`make check`)
+
+test/gate.sh and test/fronttool.c have the S7 rows. The full list is
+in test/gate.sh.
+
+- poseidon2 evals, 7 rows: `langc eval --hash poseidon2` gives the L1
+  rows at h = 4 (l1Msg, l1Zero, l1Last, l1Mid) and L7 at N = 1 (the
+  valid entry, and the bad signature at position 0). `--hash sha3`
+  gives exit 2 and `USAGE`.
+- zkml, 1 row: `langc zkml --count 1` writes the L7 entry, and the
+  zkml-lang check of the output prints ok (Q-S7-13 (a)).
+- zkml known answers, 6 evals (Q-S7-14 (a)): the head of the output
+  (the constants and zkml/xmss.lang) and one tail of test/zkml make
+  one file. The zkml-lang eval of the tail def must give the known
+  answer: kaPermZ (the permutation), kaChain2Z (2 chain steps),
+  kaRoot2Z (a root of h = 2), kaDigDiff and kaDigSDiff (the WOTS+
+  digits) give 0, the difference to the known words. kaAggNil
+  (`aggregate` on no entry) gives 1.
+- The zkml rows run only when zkml-lang is built next to this repo
+  (../zkml-lang/build/langc). If not, the gate prints `zkml:
+  skipped`.
+- fronttool: the Poseidon2 known answers of Plonky3 rev 5fcf8d7c (the
+  (ii) instance at seed 1, the (i) instance on 0..15 and on the (ii)
+  input, Q-S7-6 (a)), and the 5.4 sponge digests on 96, 128 and 160
+  bytes.
+- The S7 eval rows make 205 evals. test/check/aggregate-arg.lang
+  (TYPE_MISMATCH) makes 44 check refusals.
+- The S7 gate: `make check` EXIT 0, gate 0 failures, poseidon2 evals
+  7, zkml 1 checked, zkml known answers 6 evals.
+
+### Mutants
+
+There are 12 mutants. 12 are killed. Each mutant is an exact-match
+edit, then `make -B`, then the gate part with its check (the zkml
+block, the poseidon2 eval rows or fronttool), then a restore (a copy
+and a compare).
+
+| Mutant | File | Edit | Killer (FAIL rows) |
+|---|---|---|---|
+| M1 | src/zkml.c | the n and logw data rows are swapped | the data word check (below) |
+| M2 | zkml/xmss.lang | the sponge limb count word is 1, not 0 | 2: kaChain2Z, kaRoot2Z |
+| M3 | zkml/xmss.lang | the permutation has no initial linear layer | 2: kaPermZ, kaChain2Z |
+| M4 | zkml/xmss.lang | the chain tweak step drops start | 1: kaChain2Z |
+| M5 | zkml/xmss.lang | the 2 inputs of the path node are swapped | 1: kaRoot2Z |
+| M6 | zkml/xmss.lang | the digit bound is off by one | 2: kaDigDiff, kaDigSDiff |
+| M7 | zkml/xmss.lang | the `aggregate` fold starts at 0, not 1 | 1: kaAggNil |
+| M8 | src/zkml.c | logw 4 is written as 2 | the data word check (below) |
+| M9 | src/zkml.c | the initial round constants are the terminal ones | 2: kaPermZ, kaChain2Z |
+| M10 | src/zkml.c | an extra `)` after nil | 1: zkml (the zkml-lang check gives PARSE_EXPECT) |
+| M11 | src/front/poseidon2.c | each internal round uses the round 0 constant | 6: the fronttool Poseidon2 rows |
+| M12 | src/main.c | each hash name after keccak in byte order is taken | 1: the `--hash sha3` row |
+
+M1 and M8 change data words that no gate row reads: the zkml check
+does not evaluate the data defs, and the known-answer evals use only
+the head of the output (O28). A check of the data words of the
+output, out of `make check`, kills them (Q-S7-15 (a)).
+
+### Open items from S7
+
+- The zkml output is a zkml-lang program, not a `Circuit` term, and it
+  has no prover export (O26). A proof of `aggregate` needs a hash op
+  in the zkml-lang `Circuit` IR or a prover for the program.
+- The Wasm signer has no Poseidon2 (O27). Only `langc eval` makes a
+  signature under the Poseidon2 binding.
+- The zkml-lang arena holds about 5 to 9 Poseidon2 hashes (O28). The
+  zkml output has a zkml-lang check only, and no eval of the L7
+  entry. The 6 known-answer evals use 569 to 871 MiB max RSS.
+- S7 does not change the open items of S6.

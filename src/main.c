@@ -9,6 +9,7 @@
 #include "front/lower.h"
 #include "front/parser.h"
 #include "target.h"
+#include "zkml.h"
 
 #define ARENA_LIMIT_BYTES ((size_t)1 << 30)
 
@@ -20,7 +21,8 @@ typedef enum {
   CMD_BUILD,
   CMD_FMT,
   CMD_SIGNER,
-  CMD_VERIFIER
+  CMD_VERIFIER,
+  CMD_ZKML
 } Command;
 
 typedef struct {
@@ -36,6 +38,8 @@ typedef struct {
   const char *pk_path;
   int shim;
   int entry2;
+  HashBinding hash;
+  unsigned count;
 } Options;
 
 static const struct {
@@ -50,17 +54,19 @@ static const struct {
   {"fmt", CMD_FMT},
   {"signer", CMD_SIGNER},
   {"verifier", CMD_VERIFIER},
+  {"zkml", CMD_ZKML},
 };
 
 static int usage(FILE *err) {
   fputs("usage: langc check [--json] PROG\n"
-        "       langc eval PROG NAME [ARGS...]\n"
+        "       langc eval [--hash keccak|poseidon2] PROG NAME [ARGS...]\n"
         "       langc ir PROG\n"
         "       langc abi PROG\n"
         "       langc build PROG -o OUT [--runtime]\n"
         "       langc fmt PROG\n"
         "       langc signer --height H -o OUT\n"
-        "       langc verifier --height H --pk FILE [--entry 8141|4337] [--shim] -o OUT\n", err);
+        "       langc verifier --height H --pk FILE [--entry 8141|4337] [--shim] -o OUT\n"
+        "       langc zkml --count N PROG NAME [ARGS...] -o OUT\n", err);
   return 2;
 }
 
@@ -148,6 +154,54 @@ static int parse_verifier_options(int argc, char **argv, Options *opt, Diag *dia
              : diag_fail(diag, "USAGE", NULL, "verifier needs --height H --pk FILE [--entry 8141|4337] [--shim] -o OUT");
 }
 
+/* The --hash value of langc eval (Q-S7-7 (a)). */
+static int parse_hash(const char *text, HashBinding *hash) {
+  int poseidon2 = strcmp(text, "poseidon2") == 0;
+  *hash = poseidon2 ? HASH_POSEIDON2 : HASH_KECCAK;
+  return poseidon2 || strcmp(text, "keccak") == 0;
+}
+
+/* langc eval [--hash keccak|poseidon2] PROG NAME [ARGS...]. The binding is
+   Keccak by default (D1, Q-S7-7 (a)). */
+static int parse_eval_options(int argc, char **argv, Options *opt, Diag *diag) {
+  int shift = strcmp(argv[2], "--hash") == 0 ? 2 : 0;
+  opt->hash = HASH_KECCAK;
+  if (shift && argc < 4) return diag_fail(diag, "USAGE", NULL, "eval --hash needs keccak or poseidon2");
+  if (shift && !parse_hash(argv[3], &opt->hash)) {
+    return diag_fail(diag, "USAGE", NULL, "the eval hash '%s' is not keccak or poseidon2", argv[3]);
+  }
+  if (argc < 4 + shift) return diag_fail(diag, "USAGE", NULL, "eval needs a definition name");
+  opt->prog_path = argv[2 + shift];
+  opt->entry = argv[3 + shift];
+  opt->args = argv + 4 + shift;
+  opt->arg_count = argc - 4 - shift;
+  return 1;
+}
+
+/* The N of langc zkml --count N: 1 to 64. */
+static int parse_count(const char *text, unsigned *out) {
+  unsigned n = 0;
+  size_t i;
+  for (i = 0; text[i] >= '0' && text[i] <= '9' && n <= 64; i++) n = n * 10 + (unsigned)(text[i] - '0');
+  *out = n;
+  return i > 0 && text[i] == '\0' && n >= 1 && n <= 64;
+}
+
+/* langc zkml --count N PROG NAME [ARGS...] -o OUT (D9). The writer
+   evaluates NAME ARGS k for k = 0 to N - 1. */
+static int parse_zkml_options(int argc, char **argv, Options *opt, Diag *diag) {
+  int has_count = argc >= 4 && strcmp(argv[2], "--count") == 0 && parse_count(argv[3], &opt->count);
+  if (!has_count) return diag_fail(diag, "USAGE", NULL, "zkml needs --count N with N from 1 to 64");
+  if (argc < 8 || strcmp(argv[argc - 2], "-o") != 0)
+    return diag_fail(diag, "USAGE", NULL, "zkml needs --count N PROG NAME [ARGS...] -o OUT");
+  opt->prog_path = argv[4];
+  opt->entry = argv[5];
+  opt->args = argv + 6;
+  opt->arg_count = argc - 8;
+  opt->out_path = argv[argc - 1];
+  return 1;
+}
+
 static int parse_options(int argc, char **argv, Options *opt, Diag *diag) {
   memset(opt, 0, sizeof *opt);
   if (argc < 3 || !find_command(argv[1], &opt->command)) {
@@ -163,17 +217,15 @@ static int parse_options(int argc, char **argv, Options *opt, Diag *diag) {
       if (opt->json && argc == 3) return diag_fail(diag, "USAGE", NULL, "check --json needs a program path");
       return argc == 3 + opt->json ? 1 : diag_fail(diag, "USAGE", NULL, "too many arguments");
     case CMD_EVAL:
-      if (argc < 4) return diag_fail(diag, "USAGE", NULL, "eval needs a definition name");
-      opt->entry = argv[3];
-      opt->args = argv + 4;
-      opt->arg_count = argc - 4;
-      return 1;
+      return parse_eval_options(argc, argv, opt, diag);
     case CMD_BUILD:
       return parse_build_options(argc, argv, opt, diag);
     case CMD_SIGNER:
       return parse_signer_options(argc, argv, opt, diag);
     case CMD_VERIFIER:
       return parse_verifier_options(argc, argv, opt, diag);
+    case CMD_ZKML:
+      return parse_zkml_options(argc, argv, opt, diag);
   }
   return 0;
 }
@@ -213,6 +265,7 @@ static int run_target(const Options *opt, Machine *machine, Diag *diag) {
     case CMD_FMT:
     case CMD_VERIFIER:
     case CMD_SIGNER:
+    case CMD_ZKML:
       break;
   }
   out = fopen(opt->out_path, "wb");
@@ -255,7 +308,9 @@ static int run(const Options *opt, Arena *arena, Diag *diag) {
   if (!check_program(arena, &front.decls, &machine, diag)) return 1;
   switch (opt->command) {
     case CMD_EVAL:
-      return eval_command(&machine, opt->entry, opt->args, opt->arg_count, stdout, stderr);
+      return eval_command(&machine, opt->hash, opt->entry, opt->args, opt->arg_count, stdout, stderr);
+    case CMD_ZKML:
+      return zkml_command(&machine, opt->entry, opt->args, opt->arg_count, opt->count, opt->out_path);
     case CMD_CHECK: /* run_check does check */
     case CMD_IR:
     case CMD_ABI:

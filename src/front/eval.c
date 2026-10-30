@@ -2,6 +2,7 @@
    front/core.h). SHARED by the tcc kits. */
 #include "front/core.h"
 #include "front/keccak.h"
+#include "front/poseidon2.h"
 
 #include <string.h>
 
@@ -2293,9 +2294,10 @@ static int hash_part(Machine *m, char kind, const Value *x, Op op, const Value *
   return 1;
 }
 
-/* thChain, thNode, thMsg and prf: Keccak-256 of the 5.4 input. They
-   compute only when m->hash is set (langc eval, Q-S4-3 (a)). Else they are
-   stuck, also on digest values, so no law uses a Keccak output (L6). A trap
+/* thChain, thNode, thMsg and prf: the digest of the 5.4 input under the
+   binding m->hash (D1): Keccak-256, or Poseidon2 (poseidon2_hash_bytes).
+   They compute only in langc eval (Q-S4-3 (a)). Under HASH_NONE they are
+   stuck, also on digest values, so no law uses a hash output (L6). A trap
    argument passes. */
 static const Value *reduce_hash(Machine *m, Op op, const Value *const *a, uint32_t n) {
   const char *layout = op == OP_TH_CHAIN ? "DTD" : op == OP_TH_NODE ? "DTDD" : op == OP_PRF ? "PDT" : "PDDND";
@@ -2310,7 +2312,7 @@ static const Value *reduce_hash(Machine *m, Op op, const Value *const *a, uint32
   for (i = 0; i < n; i++)
     if (a[i]->kind == VAL_TRAP)
       return a[i];
-  if (!m->hash)
+  if (m->hash == HASH_NONE)
     return val_op(m, VAL_STUCK, op, 0, 0, a, n);
   for (i = 0; layout[i] != '\0'; i++) {
     if (layout[i] != 'P' && arg >= n)
@@ -2319,7 +2321,10 @@ static const Value *reduce_hash(Machine *m, Op op, const Value *const *a, uint32
       return out;
     arg += layout[i] == 'P' ? 0u : 1u;
   }
-  keccak256(in, 32u * (size_t)i, h);
+  if (m->hash == HASH_POSEIDON2)
+    poseidon2_hash_bytes(in, 32u * (size_t)i, h);
+  else
+    keccak256(in, 32u * (size_t)i, h);
   for (i = 0; i < 4u; i++) {
     w = 0;
     for (j = 0; j < 8u; j++)

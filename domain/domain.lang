@@ -336,6 +336,25 @@ verifyAt h pk m sig = boolElim (λ b → ℕ → Bool) (λ u → boolElim (λ b 
 verify : (pk : PubKey) → (m : Digest) → (sig : Sig (height pk)) → Bool
 verify pk m sig = verifyAt (height pk) pk m sig
 
+-- Signer is one entry of aggregate (Q-S7-8 (a)): a public key, a message
+-- and a signature at the height of the key.
+Signer : Type 0
+Signer = (pk : PubKey) × (m : Digest) × Sig (height pk)
+
+-- signerOk e is verify on the key, the message and the signature of e.
+signerOk : (e : Signer) → Bool
+signerOk e = verify (witness e) (witness (payload e)) (payload (payload e))
+
+-- The fold state of aggregate: the index and the and of the results.
+andState : (k : ℕ) → (b : Bool) → ℕ × Bool
+andState k b = pack k b
+
+-- aggregate n v (PLAN 3.2, Q-S7-8 (a)) is true when signerOk is true for
+-- each of the n entries of v. The fold does n steps and reads entry k at
+-- step k; finAt gives true past the end.
+aggregate : (n : ℕ) → (v : Fin n → Signer) → Bool
+aggregate n v = payload (fold (λ (st : ℕ × Bool) → andState (natAdd (witness st) 1) (boolElim (λ b → Bool) (finAt Bool n (λ i → signerOk (v i)) true (witness st)) false (payload st))) (andState 0 true) n)
+
 -- accept pk k m s is the L2 nonce binding (S6 D5): it is true when the
 -- index of s is the nonce k and verify pk m s is true. The EVM core does
 -- the same nonce compare before the hash work. At the D7 table sites, k is

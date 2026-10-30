@@ -204,6 +204,15 @@ typedef struct {
 
 /* The checked program and the evaluation state. No global state: every
    function gets this context. */
+/* The binding of the hash ops (D1). HASH_NONE in check and conversion: the
+   hash ops stay stuck (L6). langc eval sets Keccak (the default) or
+   Poseidon2 (--hash poseidon2, Q-S7-7 (a)). */
+typedef enum {
+  HASH_NONE,
+  HASH_KECCAK,
+  HASH_POSEIDON2
+} HashBinding;
+
 typedef struct {
   Arena *arena;
   Diag *diag;
@@ -221,7 +230,7 @@ typedef struct {
   uint32_t fresh_level; /* above every variable level allocated by this machine */
   uint64_t fuel;
   int overflowed;
-  int hash; /* 1: the hash ops compute; only langc eval sets it (Q-S4-3) */
+  HashBinding hash; /* HASH_NONE: the hash ops are stuck; only langc eval sets another (Q-S4-3) */
   size_t checked;  /* check_program: the declarations before the current one */
   int decl_failed; /* check_program: 1 when declaration CHECKED failed */
 } Machine;

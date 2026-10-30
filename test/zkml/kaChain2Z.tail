@@ -1,0 +1,8 @@
+-- S7 U5j known answer kaChain2Z (D10 form).
+def kaWordsDiff : List Nat -> List Nat -> Nat := fun xs ys => natAdd (natAdd (natSub (listLen Nat xs) (listLen Nat ys)) (natSub (listLen Nat ys) (listLen Nat xs))) (fold (fun (h : Nat) (acc : Nat) => natAdd h acc) 0 (listZipWith Nat Nat Nat (fun (a : Nat) (b : Nat) => natAdd (natSub a b) (natSub b a)) xs ys))
+def kaSeed : List Nat := cons 81985529216486895 (cons 9141386507638288912 (cons 1229801703532086340 (cons 6148914691236517205 nil)))
+def kaX : List Nat := cons 1 (cons 2 (cons 3 (cons 4 nil)))
+def kaT : List Nat := cons 1 (cons 4294967298 (cons 3 (cons 5 (cons 7 (cons 9 nil)))))
+def kaChain2Want : List Nat := cons 2869913701989966853 (cons 6651759870850738308 (cons 2726035031894614391 (cons 4669639272087659080 nil)))
+def zw : Nat -> List Nat -> List Nat := fun z ws => map (fun (w : Nat) => natAdd z w) ws
+def kaChain2Z : Nat -> Nat := fun z => kaWordsDiff (chain (zw z kaSeed) kaT (zw z kaX) 3 2) kaChain2Want

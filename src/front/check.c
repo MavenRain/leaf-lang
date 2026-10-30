@@ -3278,7 +3278,8 @@ static int print_result(Machine *m, const char *name, const Value *v, FILE *out,
   return 1;
 }
 
-int eval_command(Machine *m, const char *name, char *const *args, int arg_count, FILE *out, FILE *err) {
+int eval_command(Machine *m, HashBinding hash, const char *name, char *const *args, int arg_count, FILE *out,
+                 FILE *err) {
   uint32_t d = find_def(m, name);
   Entry entry;
   const Value *v;
@@ -3289,9 +3290,9 @@ int eval_command(Machine *m, const char *name, char *const *args, int arg_count,
     diag_fail(m->diag, "EVAL_ENTRY", name, "no definition has this name");
     return 1;
   }
-  /* The hash ops compute only here (Q-S4-3 (a)). Drop the values that
-     check computed while they were stuck. */
-  m->hash = 1;
+  /* The hash ops compute only here (Q-S4-3 (a)), under the binding HASH
+     (D1). Drop the values that check computed while they were stuck. */
+  m->hash = hash;
   for (i = 0; i < m->def_count; i++)
     m->defs[i].value = NULL;
   v = def_value(m, d);

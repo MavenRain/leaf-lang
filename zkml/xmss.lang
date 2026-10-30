@@ -1,0 +1,176 @@
+-- leaf-lang zkml/xmss.lang (S7, D5, D9): the fixed zkml-lang text of the
+-- zkml writer. The writer prints the constants defs p2RcInit and p2RcTerm
+-- (List (List Nat), 4 rows of 16) and p2RcInt (List Nat, 13 values) from
+-- poseidon2_babybear16 (src/front/poseidon2.c) before this text.
+-- A field value is a canonical Nat below bbP. A Digest is a List Nat of 4
+-- 64-bit words, w0 first (docs/PLAN.md 5.4). A Tweak is a List Nat of 6
+-- fields: layer, tree, kind, leaf, chain, step.
+-- Part 1: Poseidon2BabyBear<16>, the sponge and the 4 hash ops. Part 2:
+-- the XMSS verify on the D9 flat signer words, and aggregate.
+
+-- p2At s i: the entry i of s, or 0 when s is too short.
+def p2At : List Nat -> Nat -> Nat := fun s i => listAt Nat 0 i s
+-- p2Tail s: s without its head (nil for nil).
+def p2Tail : List Nat -> List Nat := fun s => fold (fun (l : List Nat) => List Nat) (fun (h : Nat) => fun (t : List Nat) => fun (rt : List Nat) => t) nil s
+-- p2Drop k s: s without its first k entries.
+def p2Drop : Nat -> List Nat -> List Nat := fun k s => fold (fun (n : Nat) => List Nat) (fun (n : Nat) (r : List Nat) => p2Tail r) s k
+-- p2Pick idx s: the entries of s at the indices idx.
+def p2Pick : List Nat -> List Nat -> List Nat := fun idx s => map (fun (i : Nat) => p2At s i) idx
+def p2Zeros : Nat -> List Nat := fun k => fold (fun (n : Nat) => List Nat) (fun (n : Nat) (r : List Nat) => cons 0 r) nil k
+def p2Idx4 : List Nat := cons 0 (cons 1 (cons 2 (cons 3 nil)))
+def p2Idx8 : List Nat := cons 0 (cons 1 (cons 2 (cons 3 (cons 4 (cons 5 (cons 6 (cons 7 nil)))))))
+
+-- The S-box x^7 (poseidon2.c:26-30).
+def p2Sbox7 : Nat -> Nat -> Nat := fun x x2 => bbMul (bbMul x2 x) (bbMul x2 x2)
+def p2Sbox : Nat -> Nat := fun x => p2Sbox7 x (bbMul x x)
+
+-- M4 (poseidon2.c:32-41): row i is the sum, plus x_i, plus 2 x_{i+1} (mod 4).
+def p2Mat4Row : List Nat -> Nat -> Nat -> Nat -> Nat := fun x sum i j => bbAdd (bbAdd sum (p2At x i)) (bbAdd (p2At x j) (p2At x j))
+def p2Mat4Sum : List Nat -> Nat -> List Nat := fun x sum => cons (p2Mat4Row x sum 0 1) (cons (p2Mat4Row x sum 1 2) (cons (p2Mat4Row x sum 2 3) (cons (p2Mat4Row x sum 3 0) nil)))
+def p2Mat4 : List Nat -> List Nat := fun x => p2Mat4Sum x (bbAdd (bbAdd (p2At x 0) (p2At x 1)) (bbAdd (p2At x 2) (p2At x 3)))
+-- The external linear layer (poseidon2.c:43-53): M4 on each chunk of 4,
+-- then each entry adds the sum of its column.
+def p2Chunk : List Nat -> Nat -> List Nat := fun s j => p2Pick p2Idx4 (p2Drop (natMul 4 j) s)
+def p2Mat4All : List Nat -> List Nat := fun s => listConcat Nat (map (fun (j : Nat) => p2Mat4 (p2Chunk s j)) p2Idx4)
+def p2ColSum : List Nat -> Nat -> Nat := fun t k => bbAdd (bbAdd (p2At t k) (p2At t (natAdd k 4))) (bbAdd (p2At t (natAdd k 8)) (p2At t (natAdd k 12)))
+def p2AddCols : List Nat -> List Nat -> List Nat := fun t sums => listZipWith Nat Nat Nat bbAdd t (listConcat Nat (cons sums (cons sums (cons sums (cons sums nil)))))
+def p2ExtMix : List Nat -> List Nat := fun t => p2AddCols t (map (fun (k : Nat) => p2ColSum t k) p2Idx4)
+def p2ExtLinear : List Nat -> List Nat := fun s => p2ExtMix (p2Mat4All s)
+-- One external round (poseidon2.c:55-63): the constants and the S-box on
+-- each entry, then the linear layer. p2ExtRounds applies the 4 rows in order.
+def p2ExtRound : List Nat -> List Nat -> List Nat := fun s rc => p2ExtLinear (listZipWith Nat Nat Nat (fun (a : Nat) (c : Nat) => p2Sbox (bbAdd a c)) s rc)
+def p2ExtRounds : List (List Nat) -> List Nat -> List Nat := fun rcs s => fold (fun (n : Nat) => List Nat) (fun (n : Nat) (acc : List Nat) => p2ExtRound acc (listAt (List Nat) nil n rcs)) s 4
+
+-- The internal diagonal V as canonical values: V_i = (negative ? -1 : 1) *
+-- factor / 2^shift mod p, from the diagonal[] triples (poseidon2.c:68-71).
+def p2Diag : List Nat := cons 2013265919 (cons 1 (cons 2 (cons 1006632961 (cons 3 (cons 4 (cons 1006632960 (cons 2013265918 (cons 2013265917 (cons 2005401601 (cons 1509949441 (cons 1761607681 (cons 2013265906 (cons 7864320 (cons 125829120 (cons 15 nil)))))))))))))))
+def p2Sum : List Nat -> Nat := fun s => fold (fun (h : Nat) (acc : Nat) => bbAdd h acc) 0 s
+-- One internal round (poseidon2.c:73-87): the constant and the S-box on
+-- entry 0, then s_i = full + V_i s_i, with full the sum of the state.
+def p2IntMixF : List Nat -> Nat -> List Nat := fun s full => listZipWith Nat Nat Nat (fun (d : Nat) (a : Nat) => bbAdd full (bbMul d a)) p2Diag s
+def p2IntMix : List Nat -> List Nat := fun s => p2IntMixF s (p2Sum s)
+def p2IntRound : List Nat -> Nat -> List Nat := fun s rc => p2IntMix (cons (p2Sbox (bbAdd (p2At s 0) rc)) (p2Tail s))
+def p2IntRounds : List Nat -> List Nat := fun s => fold (fun (n : Nat) => List Nat) (fun (n : Nat) (acc : List Nat) => p2IntRound acc (p2At p2RcInt n)) s 13
+-- The permutation (poseidon2.c:89-97): the linear layer, 4 external rounds,
+-- 13 internal rounds, 4 external rounds.
+def p2Permute : List Nat -> List Nat := fun s => p2ExtRounds p2RcTerm (p2IntRounds (p2ExtRounds p2RcInit (p2ExtLinear s)))
+
+-- The sponge (poseidon2.c:107-117, PLAN 5.4): rate 8, a zero start and
+-- overwrite mode. The output is the first 8 entries. The length of the
+-- input must be a multiple of 8. The count adds natMul 0 (p2At limbs 0)
+-- (Q-S7-12): it is 0 on known words, so the value is the value of the C
+-- sponge. On neutral words the count is stuck, so the Z check does not
+-- run the permutation.
+def p2Absorb : List Nat -> List Nat -> Nat -> List Nat := fun limbs st n => p2Permute (listAppend Nat (p2Pick p2Idx8 (p2Drop (natMul 8 n) limbs)) (p2Drop 8 st))
+def p2Sponge : List Nat -> List Nat := fun limbs => p2Pick p2Idx8 (fold (fun (n : Nat) => List Nat) (fun (n : Nat) (st : List Nat) => p2Absorb limbs st n) (p2Zeros 16) (natAdd (natDiv (listLen Nat limbs) 8) (natMul 0 (p2At limbs 0))))
+
+-- The limbs (PLAN 5.4): big-endian 16-bit limbs. A 64-bit word is 4 limbs
+-- and a 32-bit ADRS word is 2 limbs.
+def p2Limb : Nat -> Nat -> Nat := fun w d => natMod (natDiv w d) 65536
+def p2Limbs64 : Nat -> List Nat := fun w => cons (p2Limb w 281474976710656) (cons (p2Limb w 4294967296) (cons (p2Limb w 65536) (cons (p2Limb w 1) nil)))
+def p2Limbs32 : Nat -> List Nat := fun w => cons (p2Limb w 65536) (cons (p2Limb w 1) nil)
+-- The 32-byte parts (eval.c hash_part): a Digest; a Tweak as the RFC 8391
+-- ADRS layer, tree (2 words), kind, leaf, chain, step, 0; a Nat as
+-- toByte(v, 32); the prefix toByte(k, 32).
+def p2DigestPart : List Nat -> List Nat := fun d => listConcat Nat (map (fun (w : Nat) => p2Limbs64 w) d)
+def p2TweakPart : List Nat -> List Nat := fun t => listConcat Nat (cons (p2Limbs32 (p2At t 0)) (cons (p2Limbs64 (p2At t 1)) (cons (p2Limbs32 (p2At t 2)) (cons (p2Limbs32 (p2At t 3)) (cons (p2Limbs32 (p2At t 4)) (cons (p2Limbs32 (p2At t 5)) (cons (p2Zeros 2) nil)))))))
+def p2NatPart : Nat -> List Nat := fun v => listAppend Nat (p2Zeros 12) (p2Limbs64 v)
+def p2PrefixPart : Nat -> List Nat := fun k => listAppend Nat (p2Zeros 15) (cons k nil)
+-- The pack (PLAN 5.4): w_j = e_{2j} * 2^32 + e_{2j+1}, w0 first.
+def p2PackWord : List Nat -> Nat -> Nat := fun e j => natAdd (natMul (p2At e (natMul 2 j)) 4294967296) (p2At e (natAdd (natMul 2 j) 1))
+def p2Pack : List Nat -> List Nat := fun e => map (fun (j : Nat) => p2PackWord e j) p2Idx4
+def p2Hash : List (List Nat) -> List Nat := fun parts => p2Pack (p2Sponge (listConcat Nat parts))
+
+-- The 4 hash ops on the 5.4 layout (eval.c reduce_hash): thChain
+-- pubSeed ADRS x, thNode pubSeed ADRS l r, prf toByte(3) key ADRS, thMsg
+-- toByte(2) r root toByte(index) m.
+def thChain : List Nat -> List Nat -> List Nat -> List Nat := fun seed t x => p2Hash (cons (p2DigestPart seed) (cons (p2TweakPart t) (cons (p2DigestPart x) nil)))
+def thNode : List Nat -> List Nat -> List Nat -> List Nat -> List Nat := fun seed t l r => p2Hash (cons (p2DigestPart seed) (cons (p2TweakPart t) (cons (p2DigestPart l) (cons (p2DigestPart r) nil))))
+def prf : List Nat -> List Nat -> List Nat := fun key t => p2Hash (cons (p2PrefixPart 3) (cons (p2DigestPart key) (cons (p2TweakPart t) nil)))
+def thMsg : List Nat -> List Nat -> Nat -> List Nat -> List Nat := fun r root idx m => p2Hash (cons (p2PrefixPart 2) (cons (p2DigestPart r) (cons (p2DigestPart root) (cons (p2NatPart idx) (cons (p2DigestPart m) nil)))))
+
+-- Part 2: the WOTS+ and XMSS verify of domain/domain.lang on the D9
+-- flat signer words. A List of digests takes the place of a Fin-indexed
+-- field. Z eval is strict: it does the two arms of a flagIf. lTreeUp
+-- keeps its hash ops out of the arms. verifyAt also does the hash ops
+-- when v1Ok is false; the value does not change.
+
+-- xRange k: the list 0, 1, ..., k - 1.
+def xRange : Nat -> List Nat := fun k => fold (fun (n : Nat) => List Nat) (fun (n : Nat) (r : List Nat) => listAppend Nat r (cons n nil)) nil k
+-- wordsDigest w off: the digest in the words off to off + 3 of w.
+def wordsDigest : List Nat -> Nat -> List Nat := fun w off => cons (p2At w off) (cons (p2At w (natAdd off 1)) (cons (p2At w (natAdd off 2)) (cons (p2At w (natAdd off 3)) nil)))
+-- wordsDigests w off k: the k digests from the word off of w.
+def wordsDigests : List Nat -> Nat -> Nat -> List (List Nat) := fun w off k => map (fun (j : Nat) => wordsDigest w (natAdd off (natMul 4 j))) (xRange k)
+-- digestAt ds d k (finAt, domain.lang:115): the entry k of ds, or d
+-- past the end.
+def digestAt : List (List Nat) -> List Nat -> Nat -> List Nat := fun ds d k => listAt (List Nat) d k ds
+-- digestEq a b (the base op digestEq, eval.c:2171): the 4 words are
+-- equal.
+def digestEq : List Nat -> List Nat -> Flag := fun a b => flagIf (natEq (p2At a 0) (p2At b 0)) (flagIf (natEq (p2At a 1) (p2At b 1)) (flagIf (natEq (p2At a 2) (p2At b 2)) (natEq (p2At a 3) (p2At b 3)) flagNo) flagNo) flagNo
+
+-- WOTS+ (domain.lang:119 to 170).
+-- withStep t k (domain.lang:119): the tweak t with the step word set to k.
+def withStep : List Nat -> Nat -> List Nat := fun t k => cons (p2At t 0) (cons (p2At t 1) (cons (p2At t 2) (cons (p2At t 3) (cons (p2At t 4) (cons k nil)))))
+-- chain seed t x start steps (domain.lang:133): steps thChain calls;
+-- the call n has the step word start + n.
+def chain : List Nat -> List Nat -> List Nat -> Nat -> Nat -> List Nat := fun seed t x start steps => fold (fun (n : Nat) => List Nat) (fun (n : Nat) (acc : List Nat) => thChain seed (withStep t (natAdd start n)) acc) x steps
+-- digitPow16 e: 16 to the power e.
+def digitPow16 : Nat -> Nat := fun e => fold (fun (n : Nat) => Nat) (fun (n : Nat) (acc : Nat) => natMul acc 16) 1 e
+-- digitW4 m i (the base op digit logW4, eval.c:2187): the 4-bit digit i
+-- of m, most significant first: (w[i / 16] / 16^(15 - i mod 16)) mod 16.
+-- Past i = 63 it gives 0 (leaf-lang traps there; wotsDigit does not use
+-- that value).
+def digitW4 : List Nat -> Nat -> Nat := fun m i => natMod (natDiv (p2At m (natDiv i 16)) (digitPow16 (natSub 15 (natMod i 16)))) 16
+-- wotsCsum m (domain.lang:146): the sum of 15 - digit over the 64 digits.
+def wotsCsum : List Nat -> Nat := fun m => fold (fun (n : Nat) => Nat) (fun (n : Nat) (acc : Nat) => natAdd acc (natSub 15 (digitW4 m n))) 0 64
+-- wotsCsumDigit csum j (domain.lang:151): the 3 base-16 digits of csum,
+-- most significant first.
+def wotsCsumDigit : Nat -> Nat -> Nat := fun csum j => flagIf (natEq j 0) (natDiv csum 256) (flagIf (natEq j 1) (natMod (natDiv csum 16) 16) (natMod csum 16))
+-- wotsDigit m i (domain.lang:156): the digit i of m below 64, else the
+-- checksum digit i - 64.
+def wotsDigit : List Nat -> Nat -> Nat := fun m i => flagIf (natLe (natAdd i 1) 64) (digitW4 m i) (wotsCsumDigit (wotsCsum m) (natSub i 64))
+-- wotsTweak ots c (domain.lang:138).
+def wotsTweak : Nat -> Nat -> List Nat := fun ots c => cons 0 (cons 0 (cons 0 (cons ots (cons c (cons 0 nil)))))
+-- wotsChainEnd pubSeed ots ws i d: the chain i from the signature digest
+-- i with the digit d (domain.lang:170).
+def wotsChainEnd : List Nat -> Nat -> List (List Nat) -> Nat -> Nat -> List Nat := fun pubSeed ots ws i d => chain pubSeed (wotsTweak ots i) (digestAt ws pubSeed i) d (natSub 15 d)
+-- wotsPkFromSig pubSeed ots m ws (domain.lang:169): the 67 chain ends;
+-- ws holds the 67 signature digests.
+def wotsPkFromSig : List Nat -> Nat -> List Nat -> List (List Nat) -> List (List Nat) := fun pubSeed ots m ws => map (fun (i : Nat) => wotsChainEnd pubSeed ots ws i (wotsDigit m i)) (xRange 67)
+
+-- The L-tree and the auth path (domain.lang:175 to 304).
+-- lTreeTweak ots k j (domain.lang:175).
+def lTreeTweak : Nat -> Nat -> Nat -> List Nat := fun ots k j => cons 0 (cons 0 (cons 1 (cons ots (cons k (cons j nil)))))
+-- nodeTweak k j (domain.lang:178).
+def nodeTweak : Nat -> Nat -> List Nat := fun k j => cons 0 (cons 0 (cons 2 (cons 0 (cons k (cons j nil)))))
+-- lTreeUp pubSeed ots k len xs (domain.lang:186): the next level from
+-- the len nodes xs at the level k. The node j is thNode of the nodes 2j
+-- and 2j + 1 for j below len / 2; an odd last node goes up as it is.
+def lTreeUp : List Nat -> Nat -> Nat -> Nat -> List (List Nat) -> List (List Nat) := fun pubSeed ots k len xs => listAppend (List Nat) (map (fun (j : Nat) => thNode pubSeed (lTreeTweak ots k j) (digestAt xs pubSeed (natMul 2 j)) (digestAt xs pubSeed (natAdd (natMul 2 j) 1))) (xRange (natDiv len 2))) (flagIf (natEq (natMod len 2) 1) (cons (digestAt xs pubSeed (natSub len 1)) nil) nil)
+-- ltree pubSeed ots pk (domain.lang:192): the 7 levels 67, 34, 17, 9, 5,
+-- 3 and 2.
+def ltree : List Nat -> Nat -> List (List Nat) -> List Nat := fun pubSeed ots pk => digestAt (lTreeUp pubSeed ots 6 2 (lTreeUp pubSeed ots 5 3 (lTreeUp pubSeed ots 4 5 (lTreeUp pubSeed ots 3 9 (lTreeUp pubSeed ots 2 17 (lTreeUp pubSeed ots 1 34 (lTreeUp pubSeed ots 0 67 pk))))))) pubSeed 0
+-- pathNode pubSeed k q v a (domain.lang:297): the parent of the node v
+-- at the index q of the level k and its sibling a.
+def pathNode : List Nat -> Nat -> Nat -> List Nat -> List Nat -> List Nat := fun pubSeed k q v a => thNode pubSeed (nodeTweak k (natDiv q 2)) (flagIf (natEq (natMod q 2) 0) v a) (flagIf (natEq (natMod q 2) 0) a v)
+-- shiftR i k (domain.lang:283): i / 2^k.
+def shiftR : Nat -> Nat -> Nat := fun i k => fold (fun (n : Nat) => Nat) (fun (n : Nat) (acc : Nat) => natDiv acc 2) i k
+-- rootFromPath pubSeed h i start auth (domain.lang:303).
+def rootFromPath : List Nat -> Nat -> Nat -> List Nat -> List (List Nat) -> List Nat := fun pubSeed h i start auth => fold (fun (n : Nat) => List Nat) (fun (n : Nat) (acc : List Nat) => pathNode pubSeed n (shiftR i n) acc (digestAt auth pubSeed n)) start h
+
+-- The verify (domain.lang:324 to 356) on the D9 flat words of a signer:
+-- root (4 words), pubSeed (4), n, logw (logWBits), h, m (4), index, rand
+-- (4), the 67 x 4 wots words, the h x 4 auth words. A PubKey is the
+-- words 0 to 10, a Sig is the words from 15.
+-- height pk (domain.lang:104).
+def height : List Nat -> Nat := fun pk => p2At pk 10
+-- v1Ok pk (domain.lang:324): h at most 20, n = 32 and logw = 4.
+def v1Ok : List Nat -> Flag := fun pk => flagIf (natLe (height pk) 20) (flagIf (natEq (p2At pk 8) 32) (natEq (p2At pk 9) 4) flagNo) flagNo
+-- verifyAt h pk m sig (domain.lang:331).
+def verifyAt : Nat -> List Nat -> List Nat -> List Nat -> Flag := fun h pk m sig => flagIf (v1Ok pk) (flagIf (natEq h (height pk)) (digestEq (rootFromPath (wordsDigest pk 4) h (p2At sig 0) (ltree (wordsDigest pk 4) (p2At sig 0) (wotsPkFromSig (wordsDigest pk 4) (p2At sig 0) (thMsg (wordsDigest sig 1) (wordsDigest pk 0) (p2At sig 0) m) (wordsDigests sig 5 67))) (wordsDigests sig 273 h)) (wordsDigest pk 0)) flagNo) flagNo
+-- verify pk m sig (domain.lang:336).
+def verify : List Nat -> List Nat -> List Nat -> Flag := fun pk m sig => verifyAt (height pk) pk m sig
+-- signerOk e (domain.lang:345) on the flat words e.
+def signerOk : List Nat -> Flag := fun e => verify (p2Pick (xRange 11) e) (wordsDigest e 11) (p2Drop 15 e)
+-- aggregate es (domain.lang:355): 1 when each signer verifies, else 0.
+def aggregate : List (List Nat) -> Nat := fun es => fold (fun (e : List Nat) (acc : Nat) => flagIf (signerOk e) acc 0) 1 es

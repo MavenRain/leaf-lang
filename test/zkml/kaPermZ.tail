@@ -1,0 +1,6 @@
+-- S7 U5j known answer kaPermZ (D10 form).
+def kaWordsDiff : List Nat -> List Nat -> Nat := fun xs ys => natAdd (natAdd (natSub (listLen Nat xs) (listLen Nat ys)) (natSub (listLen Nat ys) (listLen Nat xs))) (fold (fun (h : Nat) (acc : Nat) => natAdd h acc) 0 (listZipWith Nat Nat Nat (fun (a : Nat) (b : Nat) => natAdd (natSub a b) (natSub b a)) xs ys))
+def kaIdx16 : List Nat := cons 0 (cons 1 (cons 2 (cons 3 (cons 4 (cons 5 (cons 6 (cons 7 (cons 8 (cons 9 (cons 10 (cons 11 (cons 12 (cons 13 (cons 14 (cons 15 nil)))))))))))))))
+def kaPermWant : List Nat := cons 1906786279 (cons 1737026427 (cons 1959749225 (cons 700325316 (cons 1638050605 (cons 1021608788 (cons 1726691001 (cons 1761127344 (cons 1552405120 (cons 417318995 (cons 36799261 (cons 1215172152 (cons 614923223 (cons 1300746575 (cons 957311597 (cons 304856115 nil)))))))))))))))
+def zw : Nat -> List Nat -> List Nat := fun z ws => map (fun (w : Nat) => natAdd z w) ws
+def kaPermZ : Nat -> Nat := fun z => kaWordsDiff (p2Permute (zw z kaIdx16)) kaPermWant

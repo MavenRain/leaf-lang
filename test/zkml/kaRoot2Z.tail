@@ -1,0 +1,7 @@
+-- S7 U5j known answer kaRoot2Z (D10 form, h = 2).
+def kaWordsDiff : List Nat -> List Nat -> Nat := fun xs ys => natAdd (natAdd (natSub (listLen Nat xs) (listLen Nat ys)) (natSub (listLen Nat ys) (listLen Nat xs))) (fold (fun (h : Nat) (acc : Nat) => natAdd h acc) 0 (listZipWith Nat Nat Nat (fun (a : Nat) (b : Nat) => natAdd (natSub a b) (natSub b a)) xs ys))
+def kaSeed : List Nat := cons 81985529216486895 (cons 9141386507638288912 (cons 1229801703532086340 (cons 6148914691236517205 nil)))
+def kaX : List Nat := cons 1 (cons 2 (cons 3 (cons 4 nil)))
+def kaRoot2Want : List Nat := cons 4748680559634745824 (cons 404218490606654210 (cons 7167790102952023464 (cons 3520139876976454317 nil)))
+def zw : Nat -> List Nat -> List Nat := fun z ws => map (fun (w : Nat) => natAdd z w) ws
+def kaRoot2Z : Nat -> Nat := fun z => kaWordsDiff (rootFromPath (zw z kaSeed) 2 3 (zw z kaX) (map (fun (i : Nat) => cons (natAdd z i) (cons (natAdd z 7) (cons (natAdd z 7) (cons (natAdd z 7) nil)))) (xRange 4))) kaRoot2Want

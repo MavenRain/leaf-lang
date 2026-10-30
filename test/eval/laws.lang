@@ -55,3 +55,26 @@ l2Next i = accept pk4 (natAdd i 1) msg (signAt sk skPrf pk4 i msg)
 -- message: the nonce compare passes and verify gives false.
 l2BadM : Bool
 l2BadM = accept pk4 7 (digest 5 6 7 8) (signAt sk skPrf pk4 7 msg)
+
+-- L7 vectors at h = 4 (S7 U4, D6): the entry at position k has the key
+-- l7Key k, the message l7Msg k and the signature of leaf k. At the
+-- position bad, the signature is of an other message, so verify gives
+-- false there. l7 n bad is aggregate on the first n entries; bad = n
+-- gives n valid entries.
+l7Seed : (k : ℕ) → Digest
+l7Seed k = digest 9 10 11 k
+
+l7Key : (k : ℕ) → PubKey
+l7Key k = pkFromSeeds (l7Seed k) s (v1Params 4)
+
+l7Msg : (k : ℕ) → Digest
+l7Msg k = digest k 1 2 3
+
+l7Entry : (bad : ℕ) → (k : ℕ) → Signer
+l7Entry bad k = pack (l7Key k) (pack (l7Msg k) (signAt (l7Seed k) skPrf (l7Key k) k (boolElim (λ b → Digest) (l7Msg 99) (l7Msg k) (natEq k bad))))
+
+l7Vec : (n : ℕ) → (bad : ℕ) → (i : Fin n) → Signer
+l7Vec n bad i = l7Entry bad (witness i)
+
+l7 : (n : ℕ) → (bad : ℕ) → Bool
+l7 n bad = aggregate n (l7Vec n bad)

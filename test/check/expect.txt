@@ -41,3 +41,4 @@ commit-sealed.lang REFUSE_SEALED
 sign-twice.lang REFUSE_AFFINE_REUSE
 next-twice.lang REFUSE_AFFINE_REUSE
 andthen-tree.lang TYPE_MISMATCH
+aggregate-arg.lang TYPE_MISMATCH

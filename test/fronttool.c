@@ -6,6 +6,7 @@
 
 #include "front/check.h"
 #include "front/keccak.h"
+#include "front/poseidon2.h"
 #include "front/lexer.h"
 #include "front/parser.h"
 
@@ -271,6 +272,84 @@ static int keccak_empty(void) {
   return 0;
 }
 
+/* S7 U2c: Poseidon2 BabyBear width 16 known answers (Q-S7-6 (a)). The
+   values come from W/p2vec, which checks the (ii) vector of Plonky3
+   baby-bear/src/poseidon2.rs:315-333 in Rust. */
+/* The (ii) instance: new_from_rng_128(Xoroshiro128Plus::seed_from_u64(1)) of Plonky3
+   rev 5fcf8d7c, printed by W/p2vec as canonical values. */
+static const Poseidon2Constants p2_rng1 = {
+  {
+    {1321363468, 285374923, 858595076, 131742120, 550898981, 109281027, 1548327248, 299186948, 1198120888, 1302311359, 568137078, 1484856917, 1301979945, 725688886, 941758026, 323341913},
+    {1049323172, 822409348, 1406080127, 1279024384, 214862539, 904628921, 1320747287, 11578228, 1036373712, 1474430466, 1430509860, 111174484, 1124450171, 85382027, 679880882, 243277213},
+    {1338495990, 1523013347, 1841068573, 578194469, 47683837, 1790441672, 1628061601, 1716216090, 1635810049, 1115145248, 1117524270, 678640014, 1962751651, 1367401392, 11688709, 1950824358},
+    {528649031, 1937116923, 1460949223, 1193074357, 1221801411, 1183923117, 433505619, 1928933309, 505759755, 285671663, 1047265910, 909281502, 1258966486, 864761693, 307024510, 504858517}
+  },
+  {
+    {1467478033, 1754565867, 432187324, 1452390672, 881974300, 550050336, 1447309270, 939419487, 1783112406, 1166910332, 107514714, 580516863, 2003318760, 854475946, 934896823, 994783668},
+    {1841107561, 438269126, 1550523825, 913322122, 600932628, 583000098, 1262690949, 105797869, 277542016, 170491952, 365854467, 1479645308, 1457660602, 1635879552, 499155053, 741227047},
+    {651389942, 464828001, 89696107, 360044673, 230330371, 1773129416, 1380150763, 745014723, 793475694, 1361274828, 1443741698, 51616650, 731414218, 1087554954, 1273943885, 311581717},
+    {702702762, 1473247301, 132108357, 1348260424, 476775430, 1438949459, 2434448, 1349232398, 1954471898, 1762138591, 1271221795, 1593266476, 864488771, 139147729, 1053373910, 422842363}
+  },
+  {402771160, 320708227, 1122772462, 100431997, 202594011, 1226485372, 1088619034, 64118538, 109828860, 724723599, 1662837151, 797753907, 1075635743}
+};
+static const uint32_t p2_rng1_in[POSEIDON2_WIDTH] = {894848333, 1437655012, 1200606629, 1690012884, 71131202, 1749206695, 1717947831, 120589055, 19776022, 42382981, 1831865506, 724844064, 171220207, 1299207443, 227047920, 1783754913};
+static const uint32_t p2_rng1_out[POSEIDON2_WIDTH] = {1255099308, 941729227, 93609187, 112406640, 492658670, 1824768948, 812517469, 1055381989, 670973674, 1407235524, 891397172, 1003245378, 1381303998, 1564172645, 1399931635, 1005462965};
+/* The (i) instance default_babybear_poseidon2_16() on 0..15 and on p2_rng1_in. */
+static const uint32_t p2_hl_counting_out[POSEIDON2_WIDTH] = {1906786279, 1737026427, 1959749225, 700325316, 1638050605, 1021608788, 1726691001, 1761127344, 1552405120, 417318995, 36799261, 1215172152, 614923223, 1300746575, 957311597, 304856115};
+static const uint32_t p2_hl_rng1_in_out[POSEIDON2_WIDTH] = {516096821, 90309867, 1101817252, 1660784290, 360715097, 1789519026, 1788910906, 563338433, 319524748, 1741414159, 1650859320, 894311162, 1121347488, 1692793758, 1052633829, 1344246938};
+
+static int poseidon2_vector(const char *what, const Poseidon2Constants *rc,
+                            const uint32_t in[POSEIDON2_WIDTH], const uint32_t want[POSEIDON2_WIDTH]) {
+  uint32_t s[POSEIDON2_WIDTH];
+  memcpy(s, in, sizeof s);
+  poseidon2_permute(rc, s);
+  if (memcmp(s, want, sizeof s) == 0)
+    return 1;
+  fprintf(stderr, "FAIL poseidon2 %s\n", what);
+  return 0;
+}
+
+static int poseidon2_known(void) {
+  static const uint32_t counting[POSEIDON2_WIDTH] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
+  int ok = 1;
+  ok &= poseidon2_vector("(ii) seed 1", &p2_rng1, p2_rng1_in, p2_rng1_out);
+  ok &= poseidon2_vector("(i) on 0..15", &poseidon2_babybear16, counting, p2_hl_counting_out);
+  ok &= poseidon2_vector("(i) on the (ii) input", &poseidon2_babybear16, p2_rng1_in, p2_hl_rng1_in_out);
+  return ok;
+}
+
+/* The 5.4 digests of W/p2vec: PaddingFreeSponge<Perm, 16, 8, 8> over
+   default_babybear_poseidon2_16(), the limbs and the packing of PLAN 5.4, on byte
+   i = i mod 251, for 96, 128 and 160 bytes. */
+static const unsigned char p2_hash96[32] = {
+  0x15, 0x9b, 0xe0, 0xbe, 0x77, 0xc6, 0x56, 0xa5, 0x44, 0x67, 0x61, 0x5d, 0x02, 0x17, 0x9c, 0x87,
+  0x0d, 0xfd, 0x96, 0xe3, 0x1c, 0xf8, 0xbd, 0xec, 0x32, 0xe7, 0x23, 0x6d, 0x65, 0xb9, 0xbe, 0xa0};
+static const unsigned char p2_hash128[32] = {
+  0x23, 0xd8, 0x96, 0xba, 0x32, 0xb4, 0xa3, 0x49, 0x31, 0x84, 0x7f, 0xc0, 0x66, 0xde, 0x3f, 0x6d,
+  0x54, 0xc0, 0x01, 0x63, 0x48, 0x9d, 0x17, 0x77, 0x6c, 0xa5, 0x38, 0x0d, 0x33, 0xc0, 0xef, 0xc9};
+static const unsigned char p2_hash160[32] = {
+  0x25, 0x30, 0xfa, 0x8c, 0x56, 0xba, 0x87, 0x6f, 0x5e, 0xa0, 0x81, 0x4b, 0x6e, 0xe7, 0xfb, 0x11,
+  0x62, 0xaa, 0xc0, 0x4d, 0x75, 0xcf, 0x45, 0xee, 0x66, 0x85, 0x8e, 0x57, 0x22, 0x94, 0x8c, 0xda};
+
+static int poseidon2_bytes_vector(size_t size, const unsigned char want[32]) {
+  unsigned char in[160], got[32];
+  for (size_t i = 0; i < size; i++)
+    in[i] = (unsigned char)(i % 251);
+  poseidon2_hash_bytes(in, size, got);
+  if (memcmp(got, want, sizeof got) == 0)
+    return 1;
+  fprintf(stderr, "FAIL poseidon2 bytes %zu\n", size);
+  return 0;
+}
+
+static int poseidon2_bytes_known(void) {
+  int ok = 1;
+  ok &= poseidon2_bytes_vector(96, p2_hash96);
+  ok &= poseidon2_bytes_vector(128, p2_hash128);
+  ok &= poseidon2_bytes_vector(160, p2_hash160);
+  return ok;
+}
+
 int main(int argc, char **argv) {
   if (argc == 3 && strcmp(argv[1], "dump") == 0) return dump(argv[2]);
   if (argc != 1) {
@@ -517,6 +596,10 @@ int main(int argc, char **argv) {
   ok &= domain("Sig : ℕ → Type 0\nSig h = ℕ\n\ntwo : Leaf ⊸ Digest → ((h : ℕ) × Sig h) × ((h : ℕ) × Sig h)\ntwo l m = pack (pack (leafHeight l) (sign l m)) (pack (leafHeight l) (sign l m))", "REFUSE_AFFINE_REUSE");
   /* S4 U3a: Keccak-256 of the empty input. */
   ok &= keccak_empty();
+  /* S7 U2c: Poseidon2, the (ii) and (i) instances. */
+  ok &= poseidon2_known();
+  /* S7 U3b: the 5.4 digests of the Poseidon2 sponge. */
+  ok &= poseidon2_bytes_known();
   /* S4 U3b, L6: in check a hash op stays stuck, also on digest values.
      A Path to its Keccak value is refused; the same stuck term converts. */
   ok &= domain("h : Path Digest (prf (digest 1 2 3 4) (pack 1 (pack 4294967298 (pack 3 (pack 4 (pack 5 6)))))) (digest 7828917002625406028 17928467574588468183 16839026010469504160 8590379313134116832)\nh = refl", "TYPE_REFL");

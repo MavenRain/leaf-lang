@@ -93,6 +93,83 @@ eval_refused 2 EVAL_ARGS addPrice 18446744073709551616 1
 eval_refused 2 EVAL_ARGS pick 2 4 9
 eval_refused 1 EVAL_ENTRY nope
 
+# p2_eval NAME WANT [ARGS]: `langc eval --hash poseidon2 test/eval/laws.lang
+# NAME ARGS` must exit 0 and print WANT. These are the L1 rows at h = 4 of
+# test/eval/expect.txt (Q-S7-7). pk4 is computed (`pkFromSeeds`), so the
+# rows hold under each binding.
+p2evals=0
+p2_eval() {
+  name=$1
+  want=$2
+  shift 2
+  status=0
+  got=$(build/langc eval --hash poseidon2 test/eval/laws.lang "$name" "$@" 2>"$tmp/err") || status=$?
+  p2evals=$((p2evals + 1))
+  case "$status|$got" in
+    "0|$want") ;;
+    *) echo "FAIL eval --hash poseidon2 laws $name${*:+ $*}: want $want, got exit $status: $got $(head -n 1 "$tmp/err")"; fail=$((fail + 1)) ;;
+  esac
+}
+p2_eval l1Msg 1
+p2_eval l1Zero 1
+p2_eval l1Last 1
+p2_eval l1Mid 1
+# L7 at N = 1 (D6): the valid entry, and the bad signature at position 0.
+p2_eval l7 1 1 1
+p2_eval l7 0 1 0
+# A hash that is not keccak or poseidon2 gives exit 2 and USAGE.
+status=0
+build/langc eval --hash sha3 examples/entries.lang addPrice 1 1 2>"$tmp/err" >/dev/null || status=$?
+p2evals=$((p2evals + 1))
+case "$status:$(head -n 1 "$tmp/err")" in
+  "2:langc: USAGE: -: the eval hash 'sha3' "*) ;;
+  *) echo "FAIL eval --hash sha3: want exit 2 and USAGE, got exit $status"; fail=$((fail + 1)) ;;
+esac
+echo "poseidon2 evals: $p2evals checked"
+
+# zkml (Q-S7-13): when zkml-lang is built next to this repo, `langc zkml`
+# writes the L7 entry at N = 1 (bad = 1: the valid signature) and the
+# zkml-lang check of the output prints ok.
+if [ -x ../zkml-lang/build/langc ]; then
+  status=0
+  build/langc zkml --count 1 test/eval/laws.lang l7Entry 1 -o "$tmp/zk.lang" 2>"$tmp/err" || status=$?
+  got=
+  [ "$status" -ne 0 ] || got=$(../zkml-lang/build/langc check "$tmp/zk.lang" 2>&1) || status=$?
+  case "$status|$got" in
+    "0|ok") echo "zkml: 1 checked" ;;
+    *) echo "FAIL zkml laws l7Entry 1: want exit 0 and ok, got exit $status: $got $(head -n 1 "$tmp/err")"; fail=$((fail + 1)) ;;
+  esac
+  # zk_eval NAME WANT [ARGS] (Q-S7-14): the head of the output (the lines up
+  # to `-- The data defs:`: the Poseidon2 constants and zkml/xmss.lang) and
+  # test/zkml/NAME.tail make one file. The zkml-lang eval of NAME ARGS must
+  # exit 0 and print WANT. The L7 run row waits on O28 (the Z arena).
+  awk 'NR > 1 && /^-- The data defs:/ { exit } NR > 1' "$tmp/zk.lang" >"$tmp/zkhead.lang" 2>"$tmp/err" || true
+  zkevals=0
+  zk_eval() {
+    name=$1
+    want=$2
+    shift 2
+    status=0
+    cat "$tmp/zkhead.lang" "test/zkml/$name.tail" >"$tmp/zk-$name.lang" 2>"$tmp/err" || status=$?
+    got=
+    [ "$status" -ne 0 ] || got=$(../zkml-lang/build/langc eval "$tmp/zk-$name.lang" "$name" "$@" 2>"$tmp/err") || status=$?
+    zkevals=$((zkevals + 1))
+    case "$status|$got" in
+      "0|$want") ;;
+      *) echo "FAIL zkml eval $name${*:+ $*}: want $want, got exit $status: $got $(head -n 1 "$tmp/err")"; fail=$((fail + 1)) ;;
+    esac
+  }
+  zk_eval kaPermZ 0 0
+  zk_eval kaChain2Z 0 0
+  zk_eval kaRoot2Z 0 0
+  zk_eval kaDigDiff 0
+  zk_eval kaDigSDiff 0
+  zk_eval kaAggNil 1
+  echo "zkml known answers: $zkevals evals"
+else
+  echo "zkml: skipped (no zkml-lang)"
+fi
+
 status=0
 build/langc 2>/dev/null || status=$?
 [ "$status" -eq 2 ] || { echo "FAIL usage: want exit 2, got $status"; fail=$((fail + 1)); }
