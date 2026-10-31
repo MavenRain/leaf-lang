@@ -718,7 +718,7 @@ output, out of `make check`, kills them (Q-S7-15 (a)).
 ## S8: boundary exclusion: service mode, manifests, rebuild
 
 S8 adds the boundary exclusion of the S8 row of the plan (Q-S8-1 to
-Q-S8-6). The signer service signs only a request that a checked
+Q-S8-7). The signer service signs only a request that a checked
 program gives. Each writer output gets a manifest, and `langc
 rebuild` runs the writer again and compares the bytes.
 
@@ -747,6 +747,12 @@ rebuild` runs the writer again and compares the bytes.
   tree with a change".
 - src/manifest.c and src/manifest.h: the manifest writer, the output
   buffer of the writers and the one `laws` format of `check`.
+- src/main.c (`langc rebuild`): only source 0 of a `signer` or
+  `verifier` manifest is the embedded domain text `<domain>`. Another
+  source with that name is a user file, and rebuild reads that file.
+- test/rebuild-review.c (build/rebuild-review; `make check` runs it):
+  the clean-tree rows of `langc rebuild`, with a clean version fixture
+  (S8 D7, Q-S8-7).
 - Service mode (Q-S8-1 (a), Q-S8-6 (a), PLAN section 5.2):
   test/run-wasm.mjs `FILE --service DIR`. A raw `sign` line is refused
   with `REFUSE_RAW_SIGN`, with no module call and no state change. The
@@ -776,12 +782,23 @@ test/gate.sh has the S8 rows. The full list is in test/gate.sh.
   (sources `<domain>` and pk4.bin) and of the zkml row. One row writes
   a 0x01 byte in OUT: exit 2 and no file (S8 D2i). The rows need cast
   on the PATH for keccak256. With no cast, the gate gives a FAIL row.
-- rebuilds, 9 rows (Q-S8-5 (a)): the refusals of `langc rebuild` on a
-  tree with a change. DIRTY (the manifest of a `build` of the first
-  example), the two DIRTY messages (S8 D6: the manifest, and a copy
-  with `"dirty":false`), COMMIT (40 zeros), MANIFEST (no end newline;
+- rebuilds, 9 rows (Q-S8-5 (a), S8 D7): the `langc rebuild` rows of
+  the gate. The rows are keyed on the dirty flag of the manifest of
+  this langc, so they hold on all trees. DIRTY and the manifest
+  message (S8 D6) use a copy of the manifest of a `build` of the first
+  example with `"dirty":true`. A copy with `"dirty":false` gets the
+  message "this langc is from a tree with a change" when this langc is
+  from a tree with a change, and exit 0 (the same bytes) when it is
+  from a clean tree. COMMIT (40 zeros), MANIFEST (no end newline;
   `check` as the first word), IO (a missing MANIFEST, exit 2) and
   USAGE (no MANIFEST; two MANIFEST words).
+- rebuild regressions, 8 cases (S8 D7): test/rebuild-review.c links
+  src/main.c with a clean version fixture (commit 40 zeros, dirty 0),
+  so the clean-tree rows run on all trees. The cases: exit 0 for
+  `build`, `verifier`, `signer` and `zkml`; SOURCE; WRITER (the zkml
+  manifest with the entry word changed); OUTPUT (the zkml manifest
+  with the output hash changed); OUTPUT (the zkml output file with one
+  more byte).
 - service, 10 rows (S8 D4, D5): the good request, the same request
   again (`REFUSE_HIGH_WATER`), a raw `sign` line (`REFUSE_RAW_SIGN`),
   a program with an affine reuse (`REFUSE_AFFINE_REUSE`), an ENTRY of
@@ -792,18 +809,19 @@ test/gate.sh has the S8 rows. The full list is in test/gate.sh.
   request text of fnReq, so the service refuses it.
 - The S8 gate: `make check` EXIT 0, gate 0 failures, service 10
   checked, manifests 23 checked, rebuilds 9 checked, verifier ABI
-  regressions 9 passed, zkml writer regressions 7 passed. The other
+  regressions 9 passed, zkml writer regressions 7 passed, rebuild
+  regressions 8 passed. The other
   counts are as in S7 (evals 205, check refusals 44, poseidon2 evals
   7, zkml 1 checked).
 
 ### Mutants
 
-There are 19 mutants. 14 are killed, 3 are EQUIVALENT, and 2 (B4 and
-B5) are not reached on a tree with a change. The names S1 to S10 (the
-service), B1 to B5 (rebuild) and C1 to C3 (the manifest) are mutant
-names, not stage names. Each mutant is an exact-match edit, then
-`make -B`, then the gate part with its check (the service rows, the
-rebuild rows or the full gate), then a restore (a copy and a compare).
+There are 19 mutants. 16 are killed and 3 are EQUIVALENT. The names
+S1 to S10 (the service), B1 to B5 (rebuild) and C1 to C3 (the
+manifest) are mutant names, not stage names. Each mutant is an
+exact-match edit, then `make -B`, then the gate part with its check
+(the service rows, the rebuild rows, build/rebuild-review or the full
+gate), then a restore (a copy and a compare).
 
 | Mutant | File | Edit | Killer |
 |---|---|---|---|
@@ -821,8 +839,8 @@ rebuild rows or the full gate), then a restore (a copy and a compare).
 | B1 | src/main.c | no commit compare | the COMMIT row (it gets `REFUSE_REBUILD_DIRTY`) |
 | B2 | src/main.c | `r->dirty` is 0 | the D6 manifest message row (it gets the langc message) |
 | B3 | src/main.c | `langc_dirty` is 0 | the D6 langc message row (exit 0 on the copy) |
-| B4 | src/main.c | no source compare | not reached (below) |
-| B5 | src/main.c | no byte compare | not reached (below) |
+| B4 | src/main.c | no source compare | the SOURCE case of build/rebuild-review (exit 0, success) |
+| B5 | src/main.c | no byte compare | the output-hash case of build/rebuild-review (exit 0, success) |
 | C1 | src/manifest.c | the langc keys are in a different order | 25 FAIL rows: the manifest rows |
 | C2 | src/manifest.c | the dirty flag is always false | the D6 manifest message row, as B2 |
 | C3 | src/manifest.c | the keccak256 of size - 1 bytes | 23 FAIL rows: the manifest rows |
@@ -846,15 +864,16 @@ The EQUIVALENT mutants:
   `LEX_NAT_RANGE` refusal of `check`. The ws check stays as a second
   check.
 
-B4 and B5 are not reached on a tree with a change: the DIRTY refusal
-comes first. The clean-tree rows of Q-S8-5 (a) run them after the S8
-commit (S8 U6).
+B4 and B5 are not reached by the gate rows on a tree with a change:
+the DIRTY refusal comes first. S8 D7 (Q-S8-7): test/rebuild-review.c
+links `langc rebuild` with a clean version fixture, so its clean-tree
+cases run on all trees, and they kill B4 and B5.
 
 ### Open items from S8
 
 - O29, O30, O31 and O32 (docs/PLAN.md).
 - The clean-tree rows of `langc rebuild` (exit 0, SOURCE, WRITER and
-  OUTPUT) and the mutants B4 and B5 wait for a tree with no change,
-  after the S8 commit (Q-S8-5 (a), S8 U6). On a clean tree the DIRTY
-  row and the two D6 rows change.
+  OUTPUT) and the mutants B4 and B5: closed by S8 D7 (Q-S8-7). The
+  rows are in test/rebuild-review.c, and the DIRTY rows of the gate
+  are keyed on the dirty flag.
 - S8 does not change the open items of S7.

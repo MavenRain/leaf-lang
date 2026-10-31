@@ -771,9 +771,11 @@ if ! command -v cast >/dev/null; then
 fi
 echo "manifests: $manifests checked"
 
-# D3f (Q-S8-5 (a)): `langc rebuild` refusals on a tree with a change. The
-# rows for exit 0, SOURCE, WRITER and OUTPUT need a clean tree (S8 U6); on a
-# clean tree the DIRTY row becomes the exit 0 row.
+# D3f (Q-S8-5 (a)): the `langc rebuild` rows. A langc from a tree with a
+# change refuses all manifests (DIRTY), so the rows for exit 0, SOURCE, WRITER
+# and OUTPUT are in test/rebuild-review.c, with a clean version fixture (S8
+# D7). Here the DIRTY rows and the exit 0 row use the dirty flag of the
+# manifest of this langc.
 rebuilds=0
 # rebuild_row STATUS CODE [WORDS...]: `langc rebuild WORDS` gives exit STATUS
 # and CODE on stderr.
@@ -795,14 +797,25 @@ if ! build/langc build "$rb_src" -o "$rb_out" 2>"$tmp/rb.err"; then
   echo "FAIL rebuild: build $rb_src gives an error: $(head -n 1 "$tmp/rb.err")"
   fail=$((fail + 1))
 fi
-rebuild_row 1 REFUSE_REBUILD_DIRTY "$rb_out.manifest.json"
-# S8 D6: the two message rows of the DIRTY refusal. They hold only on a tree
-# with a change, so S8 U6 changes them with the DIRTY row. The manifest of
-# this langc has "dirty":true, so rebuild refuses it with the manifest
-# message. A copy with "dirty":false gets the message of this langc.
-rebuild_row 1 "is from a langc of a tree with a change" "$rb_out.manifest.json"
+# S8 D6 and D7: a copy with "dirty":true gets the DIRTY refusal with the
+# manifest message on all trees. A copy with "dirty":false gets the message of
+# this langc when this langc is from a tree with a change, and exit 0 (the
+# same bytes) when it is from a clean tree.
+awk '{ sub(/"dirty":false/, "\"dirty\":true"); print }' "$rb_out.manifest.json" >"$tmp/rb-dirty.json"
+rebuild_row 1 REFUSE_REBUILD_DIRTY "$tmp/rb-dirty.json"
+rebuild_row 1 "is from a langc of a tree with a change" "$tmp/rb-dirty.json"
 awk '{ sub(/"dirty":true/, "\"dirty\":false"); print }' "$rb_out.manifest.json" >"$tmp/rb-clean.json"
-rebuild_row 1 "this langc is from a tree with a change" "$tmp/rb-clean.json"
+if rg -q -F '"dirty":true' "$rb_out.manifest.json"; then
+  rebuild_row 1 "this langc is from a tree with a change" "$tmp/rb-clean.json"
+else
+  rb_status=0
+  build/langc rebuild "$tmp/rb-clean.json" >"$tmp/rb.out" 2>"$tmp/rb.err" || rb_status=$?
+  rebuilds=$((rebuilds + 1))
+  if [ "$rb_status" -ne 0 ] || ! rg -q -F "$rb_out matches" "$tmp/rb.out"; then
+    echo "FAIL rebuild $tmp/rb-clean.json: want exit 0 and the same bytes, got exit $rb_status: $(head -n 1 "$tmp/rb.err")"
+    fail=$((fail + 1))
+  fi
+fi
 awk '{ z = sprintf("%040d", 0); sub(/"commit":"[0-9a-f]+"/, "\"commit\":\"" z "\""); print }' "$rb_out.manifest.json" >"$tmp/rb-commit.json"
 rebuild_row 1 REFUSE_REBUILD_COMMIT "$tmp/rb-commit.json"
 printf '%s' "$(cat "$rb_out.manifest.json")" >"$tmp/rb-line.json"

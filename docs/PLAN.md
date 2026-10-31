@@ -287,13 +287,25 @@ sessions 1, 2 and 4):
 - Q-S8-5 (2026-10-30): (a) `langc rebuild` refuses a manifest with dirty
   true with its own refusal code. A gate run on a dirty tree checks only
   that refusal code. The clean-tree rebuild row (exit 0, the same bytes)
-  waits for U6, after the USER commit (O30).
+  waits for U6, after the USER commit (O30). Q-S8-7 moves it to
+  test/rebuild-review.c, on all trees.
 - Q-S8-6 (2026-10-30): (a) the signing request is the domain type
   `Request` with the constructor `request KEY LEAF M` (domain/domain.lang).
   `check` proves that ENTRY is a request, and only the domain can declare
   the constructor `request` (R1). The embedded domain text changes, so the
   manifest source hashes of `signer` and `verifier` change; the gate
   computes them (S8 D4).
+- Q-S8-7 (2026-10-30): (3) a langc from a tree with a change refuses
+  all manifests (DIRTY), so the clean-tree rows of Q-S8-5 cannot run
+  with build/langc on that tree. The C regression test/rebuild-review.c
+  links `langc rebuild` with a clean version fixture (commit 40 zeros,
+  dirty 0), so the clean-tree rows (exit 0, SOURCE, WRITER, OUTPUT) run
+  on all trees (S8 D7). The DIRTY rows of test/gate.sh use a copy of
+  the manifest with `"dirty":true`. The copy with `"dirty":false` gets
+  the message of this langc on a tree with a change, and exit 0 (the
+  same bytes) on a clean tree. Option (1) (a second USER commit and a
+  gate on the clean tree) and option (2) (a second langc from a clean
+  worktree) are not necessary.
 
 Not ruled. The plan takes (a) for each of these:
 
@@ -991,7 +1003,7 @@ on the new checks, docs, close (stage, commit message, next prompt).
 | S5 | `keygen`, `publicKey`, `next`, `commit`; Wasm signer (Keccak in the module, `commit` import, EIP-8310 JSON in the harness); L3 to L5 | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 12; check refusals 43; evals 162; ir 14 lowered; wasm 19 modules valid; differential 951 cases, 0 mismatches; signer 2 modules valid, 28 rows; fmt 115 canonical, 6 non-canonical pairs (round trip and idempotence); json 33 fixtures, diagnostics 49 codes (31 with a fixture, 18 with no fixture); gate 0 failures; review and domain regressions passed; Keccak known answers in the module (test/ir/hashkat.lang); the h = 4 signer against `langc eval` (`rootSum`, `sigSum` and `verify` at the positions 0, 7 and 15); reset refused (`REFUSE_HIGH_WATER`); at h = 10 the module signs and verifies; L1 (keystore form), L3 to L5 as eval rows at h = 4 and refusal fixtures (Q-S5-10); 11 mutants on src/wasm.c, 10 killed, M6 height a known survivor (Q-S5-40 (a)) (docs/STATUS.md, S5) |
 | S6 | EVM verifier: ERC-4337 entry, EIP-8141 entry with the shim, nonce binding L2; measured gas | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 12; check refusals 43; evals 195; ir 14 lowered; wasm 19 modules valid; differential 951 cases, 0 mismatches; signer 2 modules valid, 95 rows; verifier ABI regressions 9 passed; fmt 115 canonical, 6 non-canonical pairs (round trip and idempotence); json 33 fixtures, diagnostics 49 codes (31 with a fixture, 18 with no fixture); gate 0 failures; review and domain regressions passed; `langc verifier` at h = 4 in `evm run`: the shim and entry 2 accept the 16 positions; a wrong nonce, a wrong message, a wrong root or a changed byte is refused (the shim reverts, entry 2 gives the word 1); the shim build is the real entry 1 build with the 5 table parts in the shim form (a byte compare; no EVM with EIP-8141, O2); L2 as the `accept` eval rows; `make gas` rows at H = 4, 10 and 16 (shim and entry 2; not in `make check`, Q-S6-8 (b)); 8 mutants on src/evm.c, 8 of 8 killed (docs/STATUS.md, S6) |
 | S7 | Poseidon2 binding (field of Q10) in `langc eval` and the zkml writer; `aggregate`; L7 | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 12; check refusals 44; evals 205; poseidon2 evals 7 (the L1 rows at h = 4, L7 at N = 1, the `--hash sha3` USAGE row); zkml 1 checked (zkml-lang accepts the `langc zkml` output of the L7 entry at N = 1); zkml known answers 6 evals (Q-S7-14 (a)); ir 14 lowered; wasm 19 modules valid; differential 951 cases, 0 mismatches; signer 2 modules valid, 95 rows; verifier ABI regressions 9 passed; fmt 116 canonical, 6 non-canonical pairs (round trip and idempotence); json 33 fixtures, diagnostics 49 codes (31 with a fixture, 18 with no fixture); gate 0 failures; review, signer persistence and domain regressions passed; fronttool: the Poseidon2 vectors of Plonky3 (the (ii) instance at seed 1, the (i) instance on 0..15 and on the (ii) input) and the 5.4 sponge digests on 96, 128 and 160 bytes; 12 mutants on zkml/xmss.lang, src/zkml.c, src/front/poseidon2.c and src/main.c, 12 of 12 killed, 2 of them by a data word check out of `make check` (docs/STATUS.md, S7) |
-| S8 | boundary exclusion: the signer service takes programs only; output manifests; rebuild compare | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 12; check refusals 44; evals 205; poseidon2 evals 7; zkml 1 checked; service 10 checked (the service mode of test/run-wasm.mjs: the good request and 9 bad requests, Q-S8-1 (a), Q-S8-6 (a)); manifests 23 checked (`OUT.manifest.json` of each writer, Q-S8-2 (a)); rebuilds 9 checked (the `langc rebuild` refusals on a tree with a change, Q-S8-5 (a); the clean-tree rows wait for S8 U6); verifier ABI regressions 9 passed; gate 0 failures; review, signer persistence, domain and zkml writer regressions passed (zkml writer 7); 19 mutants on test/run-wasm.mjs, src/main.c and src/manifest.c: 14 killed, 3 EQUIVALENT (the service mutants S8 and S10, the ws check), B4 and B5 not reached on a tree with a change (S8 U6) (docs/STATUS.md, S8) |
+| S8 | boundary exclusion: the signer service takes programs only; output manifests; rebuild compare | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 12; check refusals 44; evals 205; poseidon2 evals 7; zkml 1 checked; service 10 checked (the service mode of test/run-wasm.mjs: the good request and 9 bad requests, Q-S8-1 (a), Q-S8-6 (a)); manifests 23 checked (`OUT.manifest.json` of each writer, Q-S8-2 (a)); rebuilds 9 checked (the `langc rebuild` rows, keyed on the dirty flag, Q-S8-5 (a), Q-S8-7); rebuild regressions 8 passed (test/rebuild-review.c: the clean-tree rows with a clean version fixture, S8 D7); verifier ABI regressions 9 passed; gate 0 failures; review, signer persistence, domain and zkml writer regressions passed (zkml writer 7); 19 mutants on test/run-wasm.mjs, src/main.c and src/manifest.c: 16 killed, 3 EQUIVALENT (the service mutants S8 and S10, the ws check) (docs/STATUS.md, S8) |
 | S9 | agent kit: `SKILL.md`, grammar card, 5 graded examples, `langc mcp`, `langc explain`, `TOKEN-BASELINE.md`, final `AGENTS.md` | MCP stdio test; examples pass `check` |
 | S10 | close: `docs/STATUS.md`, `docs/VALIDATION.md`, full gate, mutant summary | full gate EXIT 0 |
 
@@ -1077,8 +1089,10 @@ on the new checks, docs, close (stage, commit message, next prompt).
 - O30: the manifest records the langc commit, not the C compiler (tcc) or
   its version. The same commit built by another compiler can write other
   bytes, and then `langc rebuild` refuses. Also a gate run on a dirty tree
-  makes manifests with dirty true (Q-S8-3 (a)), so the rebuild rows of the
-  gate need a ruling for that case (S8 U3).
+  makes manifests with dirty true (Q-S8-3 (a)). Q-S8-5 (a) and Q-S8-7
+  rule that case: the DIRTY rows of the gate are keyed on the dirty
+  flag, and the clean-tree rows run in test/rebuild-review.c with a
+  clean version fixture (S8 D7).
 - O31: the manifest is not signed. It binds the output bytes to the
   source bytes and to a langc commit, but it does not identify the person
   or the machine that made it.
