@@ -13,6 +13,18 @@ for prog in examples/*.lang; do
 done
 echo "examples: $count checked, $fail failed"
 
+# The graded examples (S9 D5): each one checks with the output ok.
+graded=0
+for prog in examples/graded/*.lang; do
+  out=$(build/langc check "$prog" 2>&1) || true
+  graded=$((graded + 1))
+  if [ "$out" != "ok" ]; then
+    echo "FAIL $prog: $out"
+    fail=$((fail + 1))
+  fi
+done
+echo "graded $graded checked"
+
 tmp=${TMPDIR:-/tmp}/langc-gate.$$
 mkdir -p "$tmp"
 
@@ -756,6 +768,26 @@ for f in $(printf '%s\n' test/json/*.lang | rg '^test/json/[A-Z_]+\.lang$'); do
 done
 echo "json: $jsons fixtures; diagnostics: $codes codes, $fixtures with a fixture, $reasons with no fixture"
 
+# explain (S9 D2, D10, D11): each row of `langc explain` gives the lines of
+# test/explain/expect.txt exactly (with the exit code and any stderr line).
+# The rows: the JSON form, the text form of one NAME, a NAME that is not a
+# definition (USAGE, exit 2) and a program that fails check (exit 1).
+explains=0
+for args in '--json test/explain/cases.lang' 'test/explain/cases.lang signOnce' \
+  '--json test/explain/cases.lang nosuchname' '--json test/check/sign-twice.lang'; do
+  explains=$((explains + 1))
+  status=0
+  build/langc explain $args >"$tmp/x.out" 2>"$tmp/x.err" || status=$?
+  echo "== explain $args exit $status"
+  cat "$tmp/x.out"
+  if [ -s "$tmp/x.err" ]; then echo "stderr: $(head -n 1 "$tmp/x.err")"; fi
+done >"$tmp/explain.txt"
+if ! cmp -s test/explain/expect.txt "$tmp/explain.txt"; then
+  echo "FAIL explain: the output is not test/explain/expect.txt: $(diff test/explain/expect.txt "$tmp/explain.txt" | rg '^[<>]' | head -n 2 | cut -c1-160 | tr '\n' ' ')"
+  fail=$((fail + 1))
+fi
+echo "explain: $explains checked"
+
 # D2i: a byte below 0x20 in a word or a path gives USAGE (exit 2), and langc
 # writes neither OUT nor the manifest.
 ctl_out="$tmp/$(printf 'c\001')out.wasm"
@@ -827,6 +859,31 @@ rebuild_row 2 USAGE
 rebuild_row 2 USAGE "$rb_out.manifest.json" "$rb_out.manifest.json"
 echo "rebuilds: $rebuilds checked"
 
+rm -rf "$tmp"
+
+# The token baseline (S9 D6): build/tokcount gives the table of docs/TOKEN-BASELINE.md
+# (the rows between the tokcount begin and end marks).
+tok_out=$(build/tokcount examples/graded/5-sign-verify-nonce.lang -- docs/token-baseline/keygen_sign.rs docs/token-baseline/NonceBinding.sol 2>&1) || true
+tok_doc=$(awk '/^<!-- tokcount end -->$/ { on = 0 } on { print } /^<!-- tokcount begin -->$/ { on = 1 }' docs/TOKEN-BASELINE.md)
+if [ -n "$tok_out" ] && [ "$tok_out" = "$tok_doc" ]; then
+  echo "token baseline: counts match"
+else
+  echo "FAIL token baseline: build/tokcount and docs/TOKEN-BASELINE.md differ"
+  fail=$((fail + 1))
+fi
+
+# The token ratio (S9 D6): 201 over 200 tokens is 1.005. Rounded half up it is 1.01; a
+# truncated ratio gives 1.00.
+mkdir -p "$tmp"
+awk 'BEGIN { for (i = 1; i <= 200; i++) printf "%s", (i > 1 ? " a" : "a"); print "" }' >"$tmp/den.txt"
+awk 'BEGIN { for (i = 1; i <= 201; i++) printf "%s", (i > 1 ? " a" : "a"); print "" }' >"$tmp/num.txt"
+tok_ratio=$(build/tokcount "$tmp/den.txt" -- "$tmp/num.txt" 2>&1 | tail -n 1) || true
+if [ "$tok_ratio" = "ratio of the tokens (total 2 over total 1): 1.01" ]; then
+  echo "token ratio: half up checked"
+else
+  echo "FAIL token ratio: $tok_ratio"
+  fail=$((fail + 1))
+fi
 rm -rf "$tmp"
 
 # design/DESIGN.md is verbatim and can hold a dash (as bridge-lang, ruling 2026-10-09).

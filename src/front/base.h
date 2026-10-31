@@ -67,5 +67,7 @@ void diag_print(const Diag *diag, FILE *out);
 /* Prints one JSON object on one line: code, severity, span, expected, found,
    fix, retry, message. */
 void diag_print_json(const Diag *diag, FILE *out);
+/* The byte size of the first UTF-8 scalar, or 0 for an invalid sequence. */
+size_t utf8_char_size(const char *text, size_t len);
 
 #endif

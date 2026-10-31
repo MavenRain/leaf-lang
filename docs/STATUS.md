@@ -877,3 +877,93 @@ cases run on all trees, and they kill B4 and B5.
   rows are in test/rebuild-review.c, and the DIRTY rows of the gate
   are keyed on the dirty flag.
 - S8 does not change the open items of S7.
+
+## S9: agent kit
+
+S9 adds the agent kit of the S9 row of the plan (Q-S9-1 to Q-S9-9
+(a); Q-S9-10 OPEN, (a) in force). An agent finds the routing rule in
+`AGENTS.md`, the loop in `skills/leaf-lang/SKILL.md`, and the same
+steps as MCP tools in `langc mcp`.
+
+- `skills/leaf-lang/SKILL.md`: the front matter (`name`,
+  `description`), when to use leaf-lang (the routing rule of
+  `AGENTS.md`), the loop (write, `check --json`, apply each `fix`,
+  `fmt`, `explain`) and the 5 tools of `langc mcp`.
+- `skills/leaf-lang/grammar-card.md`: the grammar card (Q-S9-7 (a)).
+- `examples/graded/`: 5 graded examples, 1-nat-function to
+  5-sign-verify-nonce (Q-S9-4 (a)). Each one checks with the output
+  ok.
+- `langc mcp` (src/mcp.c, src/mcp.h; Q-S9-1 (a), Q-S9-2 (a)): an MCP
+  server on standard input and standard output with the tools
+  `check`, `fmt`, `explain`, `list-base` and `show-law`.
+  The server implements MCP 2025-06-18 and selects this version when
+  a client requests an unsupported version.
+- `langc explain [--json] PROG [NAME]` (src/main.c; Q-S9-3 (a)): the
+  kind, the multiplicity, the leaves and the laws of each declaration,
+  or of NAME only. `laws` is `["L5"]` when `leaves` is not empty, else
+  `[]` (Q-S9-9 (a)).
+- `docs/TOKEN-BASELINE.md` and test/tokcount.c (build/tokcount; Q-S9-5
+  (a), Q-S9-8 (a)): an offline token proxy. The graded example 5 is
+  563 proxy tokens. The same task in Rust
+  (docs/token-baseline/keygen_sign.rs) plus Solidity
+  (docs/token-baseline/NonceBinding.sol) is 971. The ratio is 1.72.
+- test/mcp-review.c (build/mcp-review; Q-S9-6 (a)): the `langc mcp`
+  review.
+- `AGENTS.md` (final) and `README.md` (S9 D7).
+
+### Gate rows (`make check`)
+
+test/gate.sh has the S9 rows. The full list is in test/gate.sh.
+
+- graded, 5 rows: `langc check` of each file of `examples/graded/`
+  gives ok.
+- explain, 4 rows: `langc explain` of test/explain/cases.lang
+  (`--json`), of its NAME signOnce, of a NAME that is not in the
+  program (nosuchname) and of test/check/sign-twice.lang (`--json`).
+  The output must be the bytes of test/explain/expect.txt.
+- mcp, 32 rows (build/mcp-review): 17 fixed rows (the replies to
+  test/mcp/requests.jsonl are the bytes of test/mcp/responses.jsonl)
+  and 15 example rows (one `tools/call check` for each file of
+  `examples/` and `examples/graded/`: the last line of the text is the
+  last line of `langc check --json FILE`).
+- token baseline: the output of build/tokcount is the table of
+  docs/TOKEN-BASELINE.md (between the tokcount marks).
+- token ratio: 201 over 200 tokens must give the ratio 1.01 (rounded
+  half up; a truncated ratio gives 1.00).
+- The S9 gate: `make check` EXIT 0, gate 0 failures, graded 5 checked,
+  explain 4 checked, mcp 32 checked (17 fixed, 15 examples), token
+  baseline counts match, token ratio half up checked. The other counts
+  are as in S8.
+
+### Mutants
+
+There are 13 mutants. 13 are killed. M1 to M5 are on src/mcp.c, E1 to
+E4 on the explain code of src/main.c, and T1 to T4 on test/tokcount.c.
+Each mutant is an exact-match edit, then `make -B`, then the kill rows
+(build/mcp-review, the explain rows, the token baseline row and the
+token ratio row), then a restore (a copy and a compare).
+
+| Mutant | File | Edit | Killer |
+|---|---|---|---|
+| M1 | src/mcp.c | the tool name `check` is `chek` | build/mcp-review |
+| M2 | src/mcp.c | the number id echo is `null` | build/mcp-review |
+| M3 | src/mcp.c | the `show-law` lookup `== 0` is `!= 0` | build/mcp-review |
+| M4 | src/mcp.c | no string id echo | build/mcp-review |
+| M5 | src/mcp.c | the tool name `list-base` is `list-bas` | build/mcp-review |
+| E1 | src/main.c | explain prints the multiplicity 1 as `ω` | the explain rows |
+| E2 | src/main.c | explain prints the kind `def` as `postulate` | the explain rows, build/mcp-review |
+| E3 | src/main.c | explain gives the leaves of all definitions, not of the definition only | the explain rows |
+| E4 | src/main.c | the explain name lookup always finds the name | the nosuchname row |
+| T1 | test/tokcount.c | code points = bytes | the token baseline row |
+| T2 | test/tokcount.c | one token for each word character | the token baseline row |
+| T3 | test/tokcount.c | no token for a non-ASCII code point | the token baseline row |
+| T4 | test/tokcount.c | the ratio is truncated, not rounded half up | the token ratio row |
+
+T4 was LIVE on the first run: 971 over 563 = 1.7247 gives 1.72 in both
+forms. The token ratio row was then added, and it kills T4.
+
+### Open items from S9
+
+- Q-S9-10 (the base rows: (a) the kind and the slice only, (b) also
+  the PLAN 3.2 type sketch): OPEN. (a) is in force.
+- S9 does not change the open items of S8.

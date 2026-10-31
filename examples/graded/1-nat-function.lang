@@ -1,0 +1,12 @@
+-- Graded example 1 of 5 (easy). Concepts: a definition is a signature line
+-- and a clause line. The clause gives a name to each argument. natAdd and
+-- natMul are core operations on ℕ, and an application is a function and
+-- its arguments, with a space between them.
+square : (n : ℕ) → ℕ
+square n = natMul n n
+
+sumOfSquares : (a : ℕ) → (b : ℕ) → ℕ
+sumOfSquares a b = natAdd (square a) (square b)
+
+twentyFive : ℕ
+twentyFive = sumOfSquares 3 4

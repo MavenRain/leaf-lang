@@ -274,6 +274,18 @@ static void put_data(FmtText *out, const Decl *d) {
   }
 }
 
+void fmt_term(FmtText *out, const Term *term) {
+  put_term(out, term, LEVEL_BINDER);
+}
+
+void fmt_family_type(FmtText *out, const Decl *d) {
+  for (size_t i = 0; i < d->param_count; i++) {
+    put_group(out, MULT_OMEGA, d->params[i].name, d->params[i].type);
+    put_str(out, " " SYM_ARROW " ");
+  }
+  put_str(out, "Type");
+}
+
 void fmt_decl(FmtText *out, const Decl *decl) {
   switch (decl->kind) {
     case DECL_DEF:

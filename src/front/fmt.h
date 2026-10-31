@@ -19,6 +19,13 @@ void fmt_text_init(FmtText *out, Arena *arena);
 /* Appends the canonical text of one declaration. No newline after the last
    line. */
 void fmt_decl(FmtText *out, const Decl *decl);
+
+/* TERM as in a signature: the canonical text of fmt_decl (S9 D10). */
+void fmt_term(FmtText *out, const Term *term);
+
+/* The type of a family or a cofamily D (no type term): each param
+   `(x : A) → `, then `Type`, the head of fmt_decl (S9 U3d). */
+void fmt_family_type(FmtText *out, const Decl *d);
 /* Appends region I of the canonical text: a blank line when I > 0, the
    comments from *NEXT_COMMENT up to the last line of declaration I (each on
    its own line), the declaration and a newline. Moves *NEXT_COMMENT past

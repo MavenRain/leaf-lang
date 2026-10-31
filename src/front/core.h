@@ -213,6 +213,18 @@ typedef enum {
   HASH_POSEIDON2
 } HashBinding;
 
+/* A resource scope of a program body and its final use count (S9 D10,
+   `langc explain`). The checker adds one at each close, the newest first;
+   it does not change an old one. */
+typedef struct LeafUse LeafUse;
+struct LeafUse {
+  uint32_t def; /* the index in Machine.defs */
+  uint32_t level;
+  const char *name;
+  uint32_t uses;
+  const LeafUse *next;
+};
+
 typedef struct {
   Arena *arena;
   Diag *diag;
@@ -233,6 +245,7 @@ typedef struct {
   HashBinding hash; /* HASH_NONE: the hash ops are stuck; only langc eval sets another (Q-S4-3) */
   size_t checked;  /* check_program: the declarations before the current one */
   int decl_failed; /* check_program: 1 when declaration CHECKED failed */
+  const LeafUse *leaves; /* check_program: the resource scopes of the program bodies (S9 D10) */
 } Machine;
 
 /* Each function returns NULL (or 0) after a diagnostic. A NULL input gives a

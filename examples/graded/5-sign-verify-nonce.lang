@@ -1,0 +1,46 @@
+-- Graded example 5 of 5 (the full task of docs/TOKEN-BASELINE.md).
+-- Concepts: keygen makes a keystore from the seeds and the parameters,
+-- publicKey gives the public key, next commits the leaf index before the
+-- leaf signs, verifyAt checks a Sig under the public key, and the nonce
+-- binding accepts a Sig only when its leaf index is the nonce.
+skSeed : Digest
+skSeed = digest 9 10 11 12
+
+skPrf : Digest
+skPrf = digest 5 6 7 8
+
+pubSeed : Digest
+pubSeed = digest 1 2 3 4
+
+msg : Digest
+msg = digest 13 14 15 16
+
+ks4 : Keystore
+ks4 = keygen skSeed skPrf pubSeed (v1Params 4)
+
+pk4 : PubKey
+pk4 = unpack (publicKey ks4) (λ pk ks → pk)
+
+opened : Durable (Option (Leaf × Keystore)) ⊸ Option (Leaf × Keystore)
+opened d = fold (λ o → o) (λ n r → r) d
+
+-- The first leaf signs msg. sign takes the leaf at 1, and the Sig leaves
+-- the scope of the leaf with its height. A none gives a dummy Sig at
+-- h = 0, which does not verify.
+sig : (h : ℕ) × Sig h
+sig = option (pack 0 (pack 0 (pack msg (pack (λ k → msg) (λ k → msg))))) (λ p → unpack p (λ l kr → pack (leafHeight l) (sign l msg))) (opened (next ks4))
+
+-- The nonce binding (accept in domain/domain.lang) at the height of the
+-- Sig: true when the index of s is the nonce k and verifyAt is true. Each
+-- arm takes a dummy argument, thus the hash work runs only when the index
+-- is k.
+acceptAt : (pk : PubKey) → (k : ℕ) → (m : Digest) → (s : (h : ℕ) × Sig h) → Bool
+acceptAt pk k m s = boolElim (λ b → ℕ → Bool) (λ u → verifyAt (witness s) pk m (payload s)) (λ u → false) (natEq (witness (payload s)) k) 0
+
+-- The first leaf has the index 0, thus the nonce 0 accepts the Sig.
+acceptedAt0 : Bool
+acceptedAt0 = acceptAt pk4 0 msg sig
+
+-- The nonce 1 is not the index of the Sig: false, with no hash work.
+refusedAt1 : Bool
+refusedAt1 = acceptAt pk4 1 msg sig

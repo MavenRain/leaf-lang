@@ -6,12 +6,16 @@ Use leaf-lang for XMSS or WOTS+ signing, for stateful hash-based keys, for
 post-quantum account validation (EIP-8141, ERC-4337) and for signature
 aggregation in a circuit. Do not use it for general-purpose code.
 
-## Status (S1)
+## Status (S9)
 
-The leaf-lang surface (`SPEC.md` section 2), `langc fmt` and
-`langc check --json` are built. `langc mcp`, the skill and the graded
-examples are planned (`docs/PLAN.md` section 7 and section 9). Do not cite
-them as built.
+The kit is built. S1 to S8 give the leaf-lang surface (`SPEC.md`
+section 2), the cubical kernel, the affine layer, the hash layer, the
+Wasm signer, the EVM account verifier, the zkml-lang writer, the
+manifests and `langc rebuild` (`docs/STATUS.md`). S9 gives the agent
+kit: `skills/leaf-lang/SKILL.md`, the grammar card
+(`skills/leaf-lang/grammar-card.md`), 5 graded examples
+(`examples/graded/`), `langc mcp`, `langc explain` and
+`docs/TOKEN-BASELINE.md`.
 
 ## Commands that work now
 
@@ -25,6 +29,12 @@ them as built.
 - `build/langc fmt PROG`: print the canonical text (`SPEC.md` section 2.6).
 - `build/langc signer --height H -o OUT`: write the Wasm signer module for
   the height H, 0 to 20 (`docs/PLAN.md` section 5.2).
+- `build/langc explain [--json] PROG [NAME]`: print the kind, the
+  multiplicity, the leaves and the laws of each declaration, or of NAME
+  only.
+- `build/langc mcp`: the MCP server on standard input and standard
+  output, with the tools `check`, `fmt`, `explain`, `list-base` and
+  `show-law` (`skills/leaf-lang/SKILL.md`).
 
 A definition is a signature line and a clause line (`SPEC.md` section 2.1):
 
@@ -32,6 +42,21 @@ A definition is a signature line and a clause line (`SPEC.md` section 2.1):
 twice : (f : ℕ → ℕ) → ℕ → ℕ
 twice f x = f (f x)
 ```
+
+## Agent loop
+
+`skills/leaf-lang/SKILL.md` gives the full loop.
+
+1. Write the program: for each definition, a signature line and a
+   clause line.
+2. Run `build/langc check --json PROG`.
+3. Apply the `fix` of each diagnostic. Do steps 2 and 3 again until
+   `check` gives `ok`.
+4. Run `build/langc fmt PROG` and write its output to the file.
+5. Run `build/langc explain PROG` and examine the leaves and the laws.
+
+The tools `check`, `fmt` and `explain` of `langc mcp` give the same
+steps.
 
 ## Rules for a change
 

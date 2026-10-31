@@ -1,0 +1,19 @@
+-- Graded example 3 of 5. Concepts: the affine leaf. Keystore and Leaf are
+-- resources. A binder at @1, or the argument on the left of ⊸, uses its
+-- value at most one time. next takes one leaf from the keystore, unpack
+-- gives the leaf and the rest of the keystore, and the leaf signs one
+-- time. A second sign of the same leaf, or a second next of the same
+-- keystore, is refused.
+opened : Durable (Option (Leaf × Keystore)) ⊸ Option (Leaf × Keystore)
+opened d = fold (λ o → o) (λ n r → r) d
+
+-- The Sig leaves the scope of its leaf with its height. The rest kr of
+-- the keystore is not used: an affine value can be dropped.
+signOnce : (@1 ks : Keystore) → (m : Digest) → Option ((h : ℕ) × Sig h)
+signOnce ks m = option none (λ p → unpack p (λ l kr → some (pack (leafHeight l) (sign l m)))) (opened (next ks))
+
+ks4 : Keystore
+ks4 = keygen (digest 9 10 11 12) (digest 5 6 7 8) (digest 1 2 3 4) (v1Params 4)
+
+firstSig : Option ((h : ℕ) × Sig h)
+firstSig = signOnce ks4 (digest 13 14 15 16)

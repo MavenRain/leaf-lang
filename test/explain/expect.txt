@@ -1,0 +1,13 @@
+== explain --json test/explain/cases.lang exit 0
+{"counts":{"parsed":"4 of 4","typed":"4 of 4","affine":"4 of 4","laws":"0 of 0"},"defs":[{"name":"double","kind":"def","type":"(n : ℕ) → ℕ","binders":[{"name":"n","mult":"ω"}],"leaves":[],"laws":[]},{"name":"colorCode","kind":"def","type":"(c : Color) → ℕ","binders":[{"name":"c","mult":"ω"}],"leaves":[],"laws":[]},{"name":"opened","kind":"def","type":"Durable (Option (Leaf × Keystore)) ⊸ Option (Leaf × Keystore)","binders":[{"name":"_","mult":"1"}],"leaves":[{"name":"d","uses":1},{"name":"o","uses":1},{"name":"r","uses":1}],"laws":["L5"]},{"name":"signOnce","kind":"def","type":"Keystore ⊸ ℕ","binders":[{"name":"_","mult":"1"}],"leaves":[{"name":"ks","uses":1},{"name":"p","uses":1},{"name":"l","uses":1},{"name":"kr","uses":0}],"laws":["L5"]}]}
+== explain test/explain/cases.lang signOnce exit 0
+signOnce : Keystore ⊸ ℕ
+  kind: def
+  binders: _ 1
+  leaves: ks 1, p 1, l 1, kr 0
+  laws: L5
+== explain --json test/explain/cases.lang nosuchname exit 2
+stderr: langc: USAGE: -: nosuchname is not a definition of the program
+== explain --json test/check/sign-twice.lang exit 1
+{"code":"REFUSE_AFFINE_REUSE","severity":"error","span":{"file":"test/check/sign-twice.lang","line":5,"col":1,"end_line":6,"end_col":146},"expected":null,"found":null,"fix":null,"retry":true,"message":"the variable l is used more times than its multiplicity allows on one evaluation path: used 2, allowed 1 (PLAN 4.1)"}
+{"parsed":"2 of 2","typed":"1 of 2","affine":"1 of 2","laws":"0 of 0"}

@@ -9,6 +9,7 @@
 #include "front/lower.h"
 #include "front/parser.h"
 #include "manifest.h"
+#include "mcp.h"
 #include "target.h"
 #include "zkml.h"
 
@@ -24,7 +25,9 @@ typedef enum {
   CMD_SIGNER,
   CMD_VERIFIER,
   CMD_ZKML,
-  CMD_REBUILD
+  CMD_REBUILD,
+  CMD_EXPLAIN,
+  CMD_MCP
 } Command;
 
 typedef struct {
@@ -36,6 +39,9 @@ typedef struct {
   const char *out_path;
   int runtime;
   int json;
+  const char *text; /* `mcp`: the program text in memory, or NULL (read prog_path) */
+  size_t text_len;
+  FILE *out; /* `mcp`: the capture of the tool text, or NULL (stdout) */
   unsigned height;
   const char *pk_path;
   int shim;
@@ -61,6 +67,8 @@ static const struct {
   {"verifier", CMD_VERIFIER},
   {"zkml", CMD_ZKML},
   {"rebuild", CMD_REBUILD},
+  {"explain", CMD_EXPLAIN},
+  {"mcp", CMD_MCP},
 };
 
 static int usage(FILE *err) {
@@ -73,7 +81,9 @@ static int usage(FILE *err) {
         "       langc signer --height H -o OUT\n"
         "       langc verifier --height H --pk FILE [--entry 8141|4337] [--shim] -o OUT\n"
         "       langc zkml --count N PROG NAME [ARGS...] -o OUT\n"
-        "       langc rebuild MANIFEST\n", err);
+        "       langc rebuild MANIFEST\n"
+        "       langc explain [--json] PROG [NAME]\n"
+        "       langc mcp\n", err);
   return 2;
 }
 
@@ -213,10 +223,12 @@ static int parse_options(int argc, char **argv, Options *opt, Diag *diag) {
   memset(opt, 0, sizeof *opt);
   opt->words = argv + 1;
   opt->word_count = argc - 1;
-  if (argc < 3 || !find_command(argv[1], &opt->command)) {
+  if (argc < 2 || !find_command(argv[1], &opt->command)) {
     return diag_fail(diag, "USAGE", NULL, "expected a command and a program path");
   }
-  opt->json = opt->command == CMD_CHECK && strcmp(argv[2], "--json") == 0;
+  if (opt->command == CMD_MCP) return argc == 2 ? 1 : diag_fail(diag, "USAGE", NULL, "mcp takes no argument");
+  if (argc < 3) return diag_fail(diag, "USAGE", NULL, "expected a command and a program path");
+  opt->json = (opt->command == CMD_CHECK || opt->command == CMD_EXPLAIN) && strcmp(argv[2], "--json") == 0;
   opt->prog_path = argv[2 + opt->json];
   switch (opt->command) {
     case CMD_CHECK:
@@ -226,6 +238,12 @@ static int parse_options(int argc, char **argv, Options *opt, Diag *diag) {
     case CMD_REBUILD:
       if (opt->json && argc == 3) return diag_fail(diag, "USAGE", NULL, "check --json needs a program path");
       return argc == 3 + opt->json ? 1 : diag_fail(diag, "USAGE", NULL, "too many arguments");
+    case CMD_EXPLAIN:
+      if (opt->json && argc == 3) return diag_fail(diag, "USAGE", NULL, "explain --json needs a program path");
+      opt->entry = argc == 4 + opt->json ? argv[3 + opt->json] : NULL;
+      return argc <= 4 + opt->json ? 1 : diag_fail(diag, "USAGE", NULL, "too many arguments");
+    case CMD_MCP: /* parse_options returns before this switch */
+      return 0;
     case CMD_EVAL:
       return parse_eval_options(argc, argv, opt, diag);
     case CMD_BUILD:
@@ -348,9 +366,11 @@ static int run_target(const Options *opt, Machine *machine, const Manifest *m, D
     case CMD_BUILD:
     case CMD_FMT:
     case CMD_VERIFIER:
+    case CMD_EXPLAIN:
     case CMD_REBUILD:
     case CMD_SIGNER:
     case CMD_ZKML:
+    case CMD_MCP:
       break;
   }
   if (!out_buffer_open(&buf)) return diag_fail(diag, "IO", NULL, "cannot write '%s'", opt->out_path) + 2;
@@ -415,6 +435,8 @@ static int run(const Options *opt, Arena *arena, Diag *diag) {
     case CMD_REBUILD: /* run_rebuild does rebuild */
     case CMD_SIGNER: /* run_signer writes the signer */
     case CMD_VERIFIER: /* run_verifier writes the verifier */
+    case CMD_EXPLAIN: /* run_explain does explain */
+    case CMD_MCP: /* mcp_serve does mcp */
       break;
   }
   return run_target(opt, &machine, &m, diag);
@@ -497,35 +519,269 @@ static void print_progress(const Front *front, const Machine *machine, int parse
   fputc('\n', out);
 }
 
+/* The program text: the bytes of an `mcp` tool call (opt->text), else the
+   file prog_path. */
+static int source_of(const Options *opt, Arena *arena, char **text, size_t *len, Diag *diag) {
+  if (opt->text == NULL) return read_source(arena, opt->prog_path, text, len, diag);
+  *text = arena_strndup(arena, opt->text, opt->text_len);
+  *len = opt->text_len;
+  return *text != NULL ? 1 : diag_fail(diag, "OOM", NULL, "no memory for the program text");
+}
+
+/* The output of a command: stdout, or the capture of an `mcp` tool. */
+static FILE *out_of(const Options *opt) {
+  return opt->out != NULL ? opt->out : stdout;
+}
+
+/* The load and check path of `check` and `explain` (S9 D2). */
+typedef struct {
+  Front front;
+  Machine machine;
+  Diag warn;
+  int loaded;
+  int parsed;
+  int typed;
+} Checked;
+
+static void load_checked(const Options *opt, Arena *arena, Diag *diag, Checked *out) {
+  char *text = NULL;
+  size_t len = 0;
+  memset(out, 0, sizeof *out);
+  diag_init(&out->warn);
+  out->loaded = source_of(opt, arena, &text, &len, diag);
+  out->parsed = out->loaded && front_load(arena, opt->prog_path, text, len, &out->front, diag);
+  out->typed = out->parsed && check_program(arena, &out->front.decls, &out->machine, diag);
+  if (out->parsed && !out->typed && out->machine.decl_failed) {
+    diag_default_span(diag, decl_span(opt->prog_path, &out->front.decls.items[out->machine.checked]));
+  }
+  if (out->parsed) noncanon(arena, opt->prog_path, text, len, &out->front, &out->warn);
+}
+
+/* The `check --json` bytes: the error, the warning, the progress line. */
+static void print_check_json(Checked *k, Diag *diag, FILE *out) {
+  if (diag->set) diag_print_json(diag, out);
+  if (k->warn.set) diag_print_json(&k->warn, out);
+  print_progress(&k->front, &k->machine, k->parsed, k->typed, out);
+}
+
 /* `check` in both modes: the error (at most one), then the W_NONCANON
    warning (at most one), then `ok` (text) or the progress line (JSON). A
    warning does not change the exit code. */
 static int run_check(const Options *opt, Arena *arena, Diag *diag) {
-  char *text = NULL;
-  size_t len = 0;
-  Front front;
-  Machine machine;
-  Diag warn;
-  memset(&front, 0, sizeof front);
-  memset(&machine, 0, sizeof machine);
-  diag_init(&warn);
-  int loaded = read_source(arena, opt->prog_path, &text, &len, diag);
-  int parsed = loaded && front_load(arena, opt->prog_path, text, len, &front, diag);
-  int typed = parsed && check_program(arena, &front.decls, &machine, diag);
-  if (parsed && !typed && machine.decl_failed) {
-    diag_default_span(diag, decl_span(opt->prog_path, &front.decls.items[machine.checked]));
-  }
-  if (parsed) noncanon(arena, opt->prog_path, text, len, &front, &warn);
+  Checked k;
+  load_checked(opt, arena, diag, &k);
   if (opt->json) {
-    if (diag->set) diag_print_json(diag, stdout);
-    if (warn.set) diag_print_json(&warn, stdout);
-    print_progress(&front, &machine, parsed, typed, stdout);
+    print_check_json(&k, diag, out_of(opt));
   } else {
     if (diag->set) diag_print(diag, stderr);
-    if (warn.set) diag_print(&warn, stderr);
-    if (typed) puts("ok");
+    if (k.warn.set) diag_print(&k.warn, stderr);
+    if (k.typed) puts("ok");
   }
-  return typed ? 0 : loaded ? 1 : 2;
+  return k.typed ? 0 : k.loaded ? 1 : 2;
+}
+
+/* A JSON string of the LEN bytes at S. */
+static void put_json_bytes(const char *s, size_t len, FILE *out) {
+  size_t i;
+  fputc('"', out);
+  for (i = 0; i < len; i++) {
+    unsigned char ch = (unsigned char)s[i];
+    switch (ch) {
+      case '"':
+      case '\\':
+        fputc('\\', out);
+        fputc(ch, out);
+        break;
+      default:
+        if (ch < 0x20) fprintf(out, "\\u%04x", (unsigned)ch);
+        else fputc(ch, out);
+        break;
+    }
+  }
+  fputc('"', out);
+}
+
+static void put_json_str(const char *s, FILE *out) {
+  put_json_bytes(s, strlen(s), out);
+}
+
+/* The kind of a declaration (S9 D2). A checked program has only DECL_DEF
+   (rules R1 to R3). */
+static const char *explain_kind(DeclKind kind) {
+  switch (kind) {
+    case DECL_DEF: return "def";
+    case DECL_AXIOM: return "postulate";
+    case DECL_FAMILY: return "data CM";
+    case DECL_COFAMILY: return "data CC";
+  }
+  return "def";
+}
+
+/* The multiplicity of a binder (S9 D2): 0, 1 or ω. */
+static const char *explain_mult(Mult mult) {
+  switch (mult) {
+    case MULT_OMEGA: return "ω";
+    case MULT_ZERO: return "0";
+    case MULT_ONE: return "1";
+  }
+  return "ω";
+}
+
+/* The name of a Pi binder; `_` for the binder of `A ⊸ B` or `A → B`. */
+static const char *binder_name(const Term *t) {
+  return t->name != NULL ? t->name : "_";
+}
+
+/* The resource scopes of one program body (S9 D10): one item for each
+   level and name, its count the maximum over the closes of that scope (the
+   arms of a match, a term checked again), the lowest level first. */
+typedef struct {
+  const LeafUse **items;
+  uint32_t *uses;
+  size_t count;
+} Leaves;
+
+static void leaves_add(Leaves *out, const LeafUse *u) {
+  size_t i = 0;
+  while (i < out->count && (out->items[i]->level != u->level || strcmp(out->items[i]->name, u->name) != 0)) i++;
+  if (i < out->count) {
+    out->uses[i] = u->uses > out->uses[i] ? u->uses : out->uses[i];
+  } else {
+    out->items[i] = u;
+    out->uses[i] = u->uses;
+    out->count++;
+  }
+}
+
+static int leaf_after(const LeafUse *a, const LeafUse *b) {
+  return a->level != b->level ? a->level > b->level : strcmp(a->name, b->name) > 0;
+}
+
+static void explain_leaves(Arena *arena, const Machine *m, uint32_t def, Leaves *out) {
+  const LeafUse *u;
+  size_t n = 0;
+  size_t i;
+  for (u = m->leaves; u != NULL; u = u->next) n += u->def == def;
+  out->items = arena_alloc(arena, (n + 1u) * sizeof *out->items);
+  out->uses = arena_alloc(arena, (n + 1u) * sizeof *out->uses);
+  out->count = 0;
+  for (u = m->leaves; u != NULL && out->items != NULL && out->uses != NULL; u = u->next) {
+    if (u->def == def) leaves_add(out, u);
+  }
+  for (i = 1; i < out->count; i++) {
+    const LeafUse *item = out->items[i];
+    uint32_t uses = out->uses[i];
+    size_t j = i;
+    for (; j > 0 && leaf_after(out->items[j - 1], item); j--) {
+      out->items[j] = out->items[j - 1];
+      out->uses[j] = out->uses[j - 1];
+    }
+    out->items[j] = item;
+    out->uses[j] = uses;
+  }
+}
+
+/* The index in Machine.defs of the program definition NAME. */
+static uint32_t def_index(const Machine *m, const char *name) {
+  uint32_t i = 0;
+  while (i < m->def_count && (m->defs[i].origin != ORIGIN_PROGRAM || strcmp(m->defs[i].name, name) != 0)) i++;
+  return i;
+}
+
+/* 1 when NAME is a declaration of the program, not of the domain. */
+static int program_has(const Front *front, const char *name) {
+  size_t i = front->domain_count;
+  while (i < front->decls.count && strcmp(front->decls.items[i].name, name) != 0) i++;
+  return i < front->decls.count;
+}
+
+/* One item of `defs` (S9 D2, D10). Q-S9-9 (a): `laws` is L5 when the affine
+   check counts a resource in the body. FIRST: no comma before it. */
+static void explain_json(const Decl *d, const Leaves *leaves, const FmtText *type, int first, FILE *out) {
+  const Term *t;
+  size_t i;
+  fputs(first ? "{\"name\":" : ",{\"name\":", out);
+  put_json_str(d->name, out);
+  fputs(",\"kind\":", out);
+  put_json_str(explain_kind(d->kind), out);
+  fputs(",\"type\":", out);
+  put_json_bytes(type->data, type->oom ? 0 : type->len, out);
+  fputs(",\"binders\":[", out);
+  for (t = d->type; t->kind == TERM_PI; t = t->right) {
+    fputs(t == d->type ? "{\"name\":" : ",{\"name\":", out);
+    put_json_str(binder_name(t), out);
+    fputs(",\"mult\":", out);
+    put_json_str(explain_mult(t->mult), out);
+    fputc('}', out);
+  }
+  fputs("],\"leaves\":[", out);
+  for (i = 0; i < leaves->count; i++) {
+    fputs(i == 0 ? "{\"name\":" : ",{\"name\":", out);
+    put_json_str(leaves->items[i]->name, out);
+    fprintf(out, ",\"uses\":%u}", (unsigned)leaves->uses[i]);
+  }
+  fputs(leaves->count > 0 ? "],\"laws\":[\"L5\"]}" : "],\"laws\":[]}", out);
+}
+
+/* The text block of one definition: the signature line, then the kind,
+   binders, leaves and laws lines. */
+static void explain_text(const Decl *d, const Leaves *leaves, const FmtText *type, FILE *out) {
+  const Term *t;
+  size_t i;
+  fputs(d->name, out);
+  fputs(" : ", out);
+  if (type->data != NULL && !type->oom) fwrite(type->data, 1, type->len, out);
+  fprintf(out, "\n  kind: %s\n  binders:", explain_kind(d->kind));
+  for (t = d->type; t->kind == TERM_PI; t = t->right)
+    fprintf(out, "%s%s %s", t == d->type ? " " : ", ", binder_name(t), explain_mult(t->mult));
+  fputs(d->type->kind == TERM_PI ? "\n  leaves:" : " none\n  leaves:", out);
+  for (i = 0; i < leaves->count; i++)
+    fprintf(out, "%s%s %u", i == 0 ? " " : ", ", leaves->items[i]->name, (unsigned)leaves->uses[i]);
+  fputs(leaves->count > 0 ? "\n  laws: L5\n" : " none\n  laws: none\n", out);
+}
+
+/* One program definition of `explain`. Returns 0: FIRST of the next one. */
+static int explain_decl(const Options *opt, Arena *arena, const Machine *m, const Decl *d, int first) {
+  Leaves leaves;
+  FmtText type;
+  fmt_text_init(&type, arena);
+  fmt_term(&type, d->type);
+  explain_leaves(arena, m, def_index(m, d->name), &leaves);
+  if (opt->json) explain_json(d, &leaves, &type, first, out_of(opt));
+  else explain_text(d, &leaves, &type, out_of(opt));
+  return 0;
+}
+
+/* `explain` (S9 D2, D10, D11). A program that fails `check`: the `check
+   --json` bytes, exit 1. NAME keeps one definition (Q-S9-3 (a)); a NAME that
+   is not a program definition is USAGE, exit 2 (S9 D11). */
+static int run_explain(const Options *opt, Arena *arena, Diag *diag) {
+  Checked k;
+  size_t i;
+  int first = 1;
+  load_checked(opt, arena, diag, &k);
+  if (!k.typed) {
+    print_check_json(&k, diag, out_of(opt));
+    return k.loaded ? 1 : 2;
+  }
+  if (opt->entry != NULL && !program_has(&k.front, opt->entry)) {
+    (void)diag_fail(diag, "USAGE", NULL, "%s is not a definition of the program", opt->entry);
+    if (opt->out != NULL) diag_print_json(diag, opt->out);
+    else diag_print(diag, stderr);
+    return 2;
+  }
+  LawCounts counts = progress_counts(&k.front, &k.machine, k.parsed, k.typed);
+  if (opt->json) {
+    fputs("{\"counts\":", out_of(opt));
+    manifest_print_laws(&counts, out_of(opt));
+    fputs(",\"defs\":[", out_of(opt));
+  }
+  for (i = k.front.domain_count; i < k.front.decls.count; i++) {
+    const Decl *d = &k.front.decls.items[i];
+    if (opt->entry == NULL || strcmp(opt->entry, d->name) == 0) first = explain_decl(opt, arena, &k.machine, d, first);
+  }
+  if (opt->json) fputs("]}\n", out_of(opt));
+  return 0;
 }
 
 /* Lexes and parses the program only (no domain, no check), then prints the
@@ -533,7 +789,7 @@ static int run_check(const Options *opt, Arena *arena, Diag *diag) {
 static int run_fmt(const Options *opt, Arena *arena, Diag *diag) {
   char *text = NULL;
   size_t len = 0;
-  if (!read_source(arena, opt->prog_path, &text, &len, diag)) return 2;
+  if (!source_of(opt, arena, &text, &len, diag)) return 2;
   TokenList toks;
   DeclList decls = {NULL, 0, 0};
   if (!lex_source(arena, opt->prog_path, text, len, &toks, diag)) return 1;
@@ -543,8 +799,8 @@ static int run_fmt(const Options *opt, Arena *arena, Diag *diag) {
   if (!fmt_program(&out, decls.items, decls.count, &toks)) {
     return diag_fail(diag, "OOM", NULL, "no memory for the canonical text of %s", opt->prog_path) + 2;
   }
-  size_t written = out.len == 0 ? 0 : fwrite(out.data, 1, out.len, stdout);
-  if (written != out.len || fflush(stdout) != 0) return diag_fail(diag, "IO", NULL, "cannot write the canonical text") + 2;
+  size_t written = out.len == 0 ? 0 : fwrite(out.data, 1, out.len, out_of(opt));
+  if (written != out.len || fflush(out_of(opt)) != 0) return diag_fail(diag, "IO", NULL, "cannot write the canonical text") + 2;
   return 0;
 }
 
@@ -664,6 +920,158 @@ static int run_rebuild(const Options *opt, Arena *arena, Diag *diag) {
   return status;
 }
 
+/* One base name of PLAN 3.2 for `list-base`: the name, its kind (the
+   Kind column of the row) and its slice. */
+typedef struct {
+  const char *name;
+  const char *kind;
+  const char *slice;
+} BaseName;
+
+/* Each name of the PLAN 3.2 admission table, in the order of the table
+   (S9 D3). A row with more names gives one entry for each name. */
+static const BaseName BASE_NAMES[] = {
+  {"Bool", "base type", "S1"},
+  {"true", "base op", "S1"},
+  {"false", "base op", "S1"},
+  {"Nat", "base type", "S1"},
+  {"zero", "base op", "S1"},
+  {"suc", "base op", "S1"},
+  {"natAdd", "base op", "S4"},
+  {"natSub", "base op", "S4"},
+  {"natMul", "base op", "S4"},
+  {"natDiv", "base op", "S4"},
+  {"natMod", "base op", "S4"},
+  {"natEq", "base op", "S4"},
+  {"natLe", "base op", "S4"},
+  {"lt", "defined", "S4"},
+  {"Digest", "base type", "S4"},
+  {"LogW", "base type", "S4"},
+  {"logW1", "base op", "S4"},
+  {"logW2", "base op", "S4"},
+  {"logW4", "base op", "S4"},
+  {"logW8", "base op", "S4"},
+  {"logWBits", "base op", "S4"},
+  {"digest", "base op", "S4"},
+  {"digestEq", "base op", "S4"},
+  {"digit", "base op", "S4"},
+  {"Tweak", "defined", "S4"},
+  {"thChain", "hash op", "S4"},
+  {"thNode", "hash op", "S4"},
+  {"thMsg", "hash op", "S4"},
+  {"prf", "hash op", "S4"},
+  {"Params", "defined", "S4"},
+  {"chain", "defined", "S4"},
+  {"wotsPk", "defined", "S4"},
+  {"wotsSign", "defined", "S4"},
+  {"wotsPkFromSig", "defined", "S4"},
+  {"ltree", "defined", "S4"},
+  {"treeHash", "defined", "S4"},
+  {"authPath", "defined", "S4"},
+  {"rootFromPath", "defined", "S4"},
+  {"pkFromSeeds", "defined", "S4"},
+  {"signAt", "defined", "S4"},
+  {"PubKey", "defined", "S4"},
+  {"Sig", "defined", "S4"},
+  {"boolElim", "base op", "S4"},
+  {"verify", "defined", "S4"},
+  {"Leaf", "resource", "S3"},
+  {"Keystore", "resource", "S3"},
+  {"Durable", "CM (domain)", "S3"},
+  {"keygen", "base op", "S5"},
+  {"publicKey", "base op", "S5"},
+  {"next", "base op", "S5"},
+  {"sign", "base op", "S5"},
+  {"leafHeight", "base op", "S5"},
+  {"verifyAt", "defined", "S5"},
+  {"andThen", "base op", "S5"},
+  {"accept", "defined", "S6"},
+  {"sigHash", "target boundary (EVM)", "S6"},
+  {"txNonce", "target boundary (EVM)", "S6"},
+  {"approve", "target boundary (EVM)", "S6"},
+  {"commit", "target boundary (Wasm)", "S5"},
+  {"aggregate", "defined", "S7"}
+};
+
+#define BASE_NAME_COUNT (sizeof BASE_NAMES / sizeof BASE_NAMES[0])
+
+/* The `list-base` tool of `langc mcp` (S9 D3): one JSON line, each base
+   name of PLAN 3.2 with its kind and slice, then each declaration of
+   domain/domain.lang with its kind and type. */
+static int list_base(Arena *arena, FILE *out, Diag *diag) {
+  Front front;
+  FmtText type;
+  size_t i;
+  if (!front_load(arena, "<domain>", "", 0, &front, diag)) return 1;
+  for (i = 0; i < BASE_NAME_COUNT; i++) {
+    fputs(i == 0 ? "{\"base\":[{\"name\":" : ",{\"name\":", out);
+    put_json_str(BASE_NAMES[i].name, out);
+    fputs(",\"kind\":", out);
+    put_json_str(BASE_NAMES[i].kind, out);
+    fputs(",\"slice\":", out);
+    put_json_str(BASE_NAMES[i].slice, out);
+    fputc('}', out);
+  }
+  fputs("],\"domain\":[", out);
+  for (i = 0; i < front.domain_count; i++) {
+    const Decl *d = &front.decls.items[i];
+    fmt_text_init(&type, arena);
+    if (d->type != NULL)
+      fmt_term(&type, d->type);
+    else
+      fmt_family_type(&type, d);
+    fputs(i == 0 ? "{\"name\":" : ",{\"name\":", out);
+    put_json_str(d->name, out);
+    fputs(",\"kind\":", out);
+    put_json_str(explain_kind(d->kind), out);
+    fputs(",\"type\":", out);
+    put_json_bytes(type.data, type.oom ? 0 : type.len, out);
+    fputc('}', out);
+  }
+  fputs("]}\n", out);
+  return 0;
+}
+
+/* The tools of `langc mcp` that need the front (S9 D3): TOOL on the LEN
+   bytes of the program TEXT, the tool text on OUT. Returns 0, or 1 for
+   isError true. */
+static int mcp_tool(McpTool tool, const char *text, size_t len, const char *name, FILE *out) {
+  Options opt;
+  Diag diag;
+  Arena arena;
+  int status = 0;
+  memset(&opt, 0, sizeof opt);
+  opt.json = 1;
+  opt.prog_path = "source";
+  opt.text = text;
+  opt.text_len = len;
+  opt.entry = name;
+  opt.out = out;
+  diag_init(&diag);
+  arena_init(&arena, ARENA_LIMIT_BYTES);
+  switch (tool) {
+    case MCP_TOOL_CHECK:
+      opt.command = CMD_CHECK;
+      status = run_check(&opt, &arena, &diag);
+      break;
+    case MCP_TOOL_FMT:
+      opt.command = CMD_FMT;
+      status = run_fmt(&opt, &arena, &diag);
+      if (status != 0 && diag.set) diag_print_json(&diag, out);
+      break;
+    case MCP_TOOL_EXPLAIN:
+      opt.command = CMD_EXPLAIN;
+      status = run_explain(&opt, &arena, &diag);
+      break;
+    case MCP_TOOL_LIST_BASE:
+      status = list_base(&arena, out, &diag);
+      if (status != 0 && diag.set) diag_print_json(&diag, out);
+      break;
+  }
+  arena_release(&arena);
+  return status != 0;
+}
+
 int main(int argc, char **argv) {
   Diag diag;
   diag_init(&diag);
@@ -672,6 +1080,7 @@ int main(int argc, char **argv) {
     diag_print(&diag, stderr);
     return usage(stderr);
   }
+  if (opt.command == CMD_MCP) return mcp_serve(mcp_tool, stdin, stdout);
   Arena arena;
   arena_init(&arena, ARENA_LIMIT_BYTES);
   int status = opt.command == CMD_FMT        ? run_fmt(&opt, &arena, &diag)
@@ -679,9 +1088,10 @@ int main(int argc, char **argv) {
                : opt.command == CMD_SIGNER   ? run_signer(&opt, &arena, &diag)
                : opt.command == CMD_VERIFIER ? run_verifier(&opt, &arena, &diag)
                : opt.command == CMD_REBUILD  ? run_rebuild(&opt, &arena, &diag)
+               : opt.command == CMD_EXPLAIN  ? run_explain(&opt, &arena, &diag)
                                              : run(&opt, &arena, &diag);
   arena_release(&arena);
-  /* run_check prints its own diagnostics. */
-  if (status != 0 && diag.set && opt.command != CMD_CHECK) diag_print(&diag, stderr);
+  /* run_check and run_explain print their own diagnostics. */
+  if (status != 0 && diag.set && opt.command != CMD_CHECK && opt.command != CMD_EXPLAIN) diag_print(&diag, stderr);
   return status;
 }

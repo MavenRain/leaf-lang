@@ -5,16 +5,18 @@ CFLAGS = -std=c99 -Wall -Werror -Isrc
 CLANG_FLAGS = -std=c99 -Wall -Wextra -Wswitch-enum -Werror -fsyntax-only -Isrc
 FRONT = src/front/base.c src/front/lexer.c src/front/parser.c src/front/fmt.c src/front/front.c src/front/eval.c src/front/check.c src/front/lower.c src/front/keccak.c src/front/poseidon2.c
 TARGET = src/wasm.c src/asm.c src/evm.c
-SRC = src/main.c src/manifest.c src/zkml.c $(FRONT) $(TARGET)
+SRC = src/main.c src/mcp.c src/manifest.c src/zkml.c $(FRONT) $(TARGET)
 FRONT_TOOL = test/fronttool.c $(filter-out src/front/front.c src/front/lower.c,$(FRONT))
 VERIFIER_REVIEW = test/verifier-review.c src/asm.c src/evm.c
 ZKML_REVIEW = test/zkml-review.c src/zkml.c $(filter-out src/front/lower.c,$(FRONT))
 REBUILD_REVIEW = test/rebuild-review.c $(filter-out src/main.c,$(SRC))
+MCP_REVIEW = test/mcp-review.c src/mcp.c src/front/base.c
+TOKCOUNT = test/tokcount.c
 HEADERS = $(wildcard src/*.h src/front/*.h)
 
 .PHONY: build check check-clang clean gas FORCE
 
-build: build/langc build/fronttool build/verifier-review build/zkml-review build/rebuild-review
+build: build/langc build/fronttool build/verifier-review build/zkml-review build/rebuild-review build/mcp-review build/tokcount
 
 build/domain.c: domain/domain.lang gen/embed.c
 	mkdir -p build
@@ -52,15 +54,24 @@ build/zkml-review: $(ZKML_REVIEW) $(HEADERS) build/domain.c build/zkml-text.c
 build/rebuild-review: $(REBUILD_REVIEW) src/main.c $(HEADERS) build/domain.c build/zkml-text.c
 	$(TCC) $(CFLAGS) -o $@ $(REBUILD_REVIEW) build/domain.c build/zkml-text.c
 
+build/mcp-review: $(MCP_REVIEW) $(HEADERS) build/version.c
+	$(TCC) $(CFLAGS) -o $@ $(MCP_REVIEW) build/version.c
+
+build/tokcount: $(TOKCOUNT)
+	$(TCC) $(CFLAGS) -o $@ $(TOKCOUNT)
+
 check-clang: build/domain.c build/zkml-text.c build/version.c
 	$(CC) $(CLANG_FLAGS) $(SRC) build/domain.c build/zkml-text.c build/version.c
 	$(CC) $(CLANG_FLAGS) $(FRONT_TOOL)
 	$(CC) $(CLANG_FLAGS) $(VERIFIER_REVIEW)
 	$(CC) $(CLANG_FLAGS) $(ZKML_REVIEW)
 	$(CC) $(CLANG_FLAGS) $(REBUILD_REVIEW)
+	$(CC) $(CLANG_FLAGS) $(MCP_REVIEW) build/version.c
+	$(CC) $(CLANG_FLAGS) $(TOKCOUNT)
 
-check: build/langc build/fronttool build/verifier-review build/zkml-review build/rebuild-review check-clang
+check: build/langc build/fronttool build/verifier-review build/zkml-review build/rebuild-review build/mcp-review build/tokcount check-clang
 	sh test/gate.sh
+	build/mcp-review
 	sh test/review.sh
 	build/fronttool
 	build/zkml-review

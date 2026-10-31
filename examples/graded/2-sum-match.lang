@@ -1,0 +1,18 @@
+-- Graded example 2 of 5. Concepts: a domain CM and a match. Sum A B (in
+-- domain/domain.lang) has the constructors inl and inr, and fold is its
+-- match: one arm for each constructor. Option has some and none, and
+-- option is its match: the value for none, then the arm for some.
+parsed : Sum Bool ℕ
+parsed = inr Bool ℕ 7
+
+orZero : (s : Sum Bool ℕ) → ℕ
+orZero s = fold (λ (e : Bool) → 0) (λ (n : ℕ) → n) s
+
+seven : ℕ
+seven = orZero parsed
+
+nextOf : (o : Option ℕ) → ℕ
+nextOf o = option 0 (λ n → natAdd n 1) o
+
+eight : ℕ
+eight = nextOf (some 7)

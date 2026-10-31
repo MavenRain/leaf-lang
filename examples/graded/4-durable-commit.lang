@@ -1,0 +1,24 @@
+-- Graded example 4 of 5. Concepts: the signer effect Durable, and commit
+-- before sign by data dependency (Q5 (a)). next ks is a Durable tree: its
+-- commit node writes the next leaf index, and the leaf is under that node.
+-- andThen runs its continuation under the commit node, thus the leaf, and
+-- the sign of the leaf, can come only after the commit. A program cannot
+-- make a commit node: only next writes a keystore position.
+Signed : Type 0
+Signed = Option (((h : ℕ) × Sig h) × Keystore)
+
+-- One next, then the leaf signs m. The Sig and the rest of the keystore
+-- leave the scope of the leaf as a pair.
+signNext : (m : Digest) → Keystore ⊸ Durable Signed
+signNext m ks = andThen (next ks) (λ o → done Signed (option none (λ p → unpack p (λ l kr → some (pack (pack (leafHeight l) (sign l m)) kr))) o))
+
+-- Two signs: the second next uses the rest of the keystore from the
+-- first, thus it is under the commit node of the first.
+signTwo : (m : Digest) → Keystore ⊸ Durable Signed
+signTwo m ks = andThen (signNext m ks) (λ o → option (done Signed none) (λ q → unpack q (λ s kr → signNext m kr)) o)
+
+ks4 : Keystore
+ks4 = keygen (digest 9 10 11 12) (digest 5 6 7 8) (digest 1 2 3 4) (v1Params 4)
+
+twoSigns : Durable Signed
+twoSigns = signTwo (digest 13 14 15 16) ks4

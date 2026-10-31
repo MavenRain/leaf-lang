@@ -42,6 +42,7 @@ typedef struct {
   uint32_t self_uses; /* the uses of that family in the current field */
   const Value *face;  /* the faces of the enclosing system cells, or NULL */
   Mult at;            /* the level of the current term: 0 in a type position, else 1 (PLAN 4.1) */
+  int record;         /* 1 while a program body is checked: pop records its resource scopes (S9 D10) */
 } Checker;
 
 static int resource_type(Checker *c, const Value *v);
@@ -368,7 +369,32 @@ static int push(Checker *c, const char *name, const Value *type) {
   return push_at(c, MULT_OMEGA, name, type);
 }
 
+/* S9 D10 (`langc explain`): the final use count of a resource scope of a
+   program body (resource_type: Leaf, Keystore or a type that holds one).
+   The record keeps the fuel and the diagnostic, thus it does not change a
+   check result. A probe on a copy of the Machine adds to its copy only. */
+static void record_leaf(Checker *c, const Scope *s) {
+  Machine *m = c->m;
+  uint64_t fuel = m->fuel;
+  int overflowed = m->overflowed;
+  Diag diag = *m->diag;
+  int resource = c->record && s->name != NULL && resource_type(c, s->type);
+  LeafUse *u = resource ? arena_alloc(m->arena, sizeof *u) : NULL;
+  m->fuel = fuel;
+  m->overflowed = overflowed;
+  *m->diag = diag;
+  if (u == NULL)
+    return;
+  u->def = m->def_count;
+  u->level = s->level;
+  u->name = s->name;
+  u->uses = s->uses;
+  u->next = m->leaves;
+  m->leaves = u;
+}
+
 static void pop(Checker *c) {
+  record_leaf(c, c->scope);
   c->scope = c->scope->next;
   c->env = c->env->next;
   c->level--;
@@ -3120,7 +3146,9 @@ static int check_def(Checker *c, const Decl *d) {
      line, or a family of partial elements. A bare pretype is not. */
   const Core *t = check_type_at(c, d->type, &level, d->type->kind == TERM_PI);
   const Value *tv = here(c, t);
+  c->record = d->origin == ORIGIN_PROGRAM;
   const Core *body = check_at(c, erased_type(c, tv) ? MULT_ZERO : MULT_ONE, d->body, tv);
+  c->record = 0;
   DefInfo *info = &m->defs[m->def_count];
   if (body == NULL)
     return 0;
