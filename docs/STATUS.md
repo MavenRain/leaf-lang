@@ -1,34 +1,212 @@
 # leaf-lang status
 
-> Write here: one paragraph. Say which milestone the build implements, and
-> which milestone it does not complete yet.
+The build implements the slices S1 to S9 of docs/PLAN.md section 9, with
+the v1 parameters (Keccak-256, n = 32, w = 16; PLAN Q6 (a) and Q7). Each
+slice has its section below and its `make check` row in PLAN section 9.
+The build does not complete M0: the items of "Remaining M0 work" are
+open (PLAN section 10, Q-S10-2 (a)). The items of "Known limits" are
+open too, but M0 does not need them.
 
 ## Implemented
 
-> Write here: one item for each feature that works. Name the former (F1 to
-> F15), the core type or the core operation.
-
-- <feature>.
+- The canonical surface: Agda-like Unicode (Q14 (b)), named steps as
+  top-level definitions, `langc fmt` and `W_NONCANON`, `check --json`
+  with progress counts (S1).
+- The kernel port: `Path`, `Sigma`, `Pi`, `U`, `I`, `transp`, `hcomp`,
+  `Glue` and `ua` (S2-Q1 (a)); `REFUSE_CELL`; the cofamily (`codata`);
+  `Fin` and `Sum` as domain definitions (S2-Q2 (b)); the dead kit Ops
+  are removed (O18, S2 U2) (S2).
+- The affine layer: multiplicities, `-o`, the resource sorts, the sealed
+  `Leaf` and `Keystore`, `Durable` (a spine) and the five S3 refusal
+  codes (S3).
+- The hash core: `Digest`, the hash ops, WOTS+, the L-tree, Merkle,
+  `sign` and `verify`, the reference Keccak of `langc eval`, the laws L1
+  and L6 (S4).
+- The keystore operations `keygen`, `publicKey`, `next` and `commit`,
+  and the Wasm signer (Keccak in the module, the `commit` import, the
+  EIP-8310 JSON in the harness); the laws L3 to L5 (S5).
+- The EVM verifier of `langc verifier`: the ERC-4337 entry (entry 2),
+  the EIP-8141 entry 1 with the shim, the nonce binding L2 and the
+  measured gas rows (S6).
+- The Poseidon2 binding (BabyBear, Q10 (a)) in `langc eval` and in the
+  zkml writer `langc zkml`; `aggregate`; the law L7 (S7).
+- The boundary exclusion: the signer service takes programs only; the
+  output manifests `OUT.manifest.json`; the rebuild compare `langc
+  rebuild` (S8).
+- The agent kit: `SKILL.md`, the grammar card, 5 graded examples,
+  `langc mcp`, `langc explain`, docs/TOKEN-BASELINE.md and the final
+  `AGENTS.md` (S9).
 
 ## Remaining M0 work
 
-> Write here: one numbered item for each missing feature. Say what each item
-> needs first.
-
-1. <work item>.
+1. O23: an `execute` entry for the ERC-4337 account. The S6 account can
+   validate a UserOperation, but it cannot act. It needs first the
+   design of the call (D12).
+2. O24: the EIP-8141 SENDER frame. Entry 1 has only the VERIFY frame. It
+   needs first an EVM with EIP-8141 for its test rows (see "Known
+   limits").
+3. O25: the deployment of the verifier code (D12). It needs first the
+   entries of items 1 and 2.
+4. O6: zeroize the secrets of a dropped leaf in the Wasm module. It
+   needs first a drop path in the module: a dropped leaf has no
+   destructor (PLAN 4, S5).
+5. O27: Poseidon2 in the Wasm signer. Only `langc eval` makes a
+   signature under the Poseidon2 binding (5.4). It needs first a port of
+   the Poseidon2 permutation into the module (S7).
+6. O26: a proof of `aggregate`. The zkml output is a zkml-lang program,
+   not a `Circuit` term, and it has no prover export (Q-S7-1 (a), 5.3).
+   It needs first a hash op in the zkml-lang `Circuit` IR or a prover
+   for the program.
+7. O15: a `let` form under Q14 (b). It needs first a design of the form.
+8. O17: the name of `if` (`flagIf` keeps its kit name). It needs first
+   a USER ruling.
+9. O20: the infix path type `x ≡ y`. Until then `Path A x y` is the only
+   spelling (S2-Q1 (a)). It needs first implicit arguments.
 
 ## Known limits
 
-> Write here: one item for each limit of the current build, with its cause
-> (a fuel budget, a host limit, a stack size).
-
-- <limit>.
+- O1: the EIP-8141 opcodes and the signature hash are a draft. The
+  writer keeps the opcodes in one table (cause: a draft EIP; last check
+  S6 U4).
+- O2: the kit EVM harness has no EIP-8141, so entry 1 is tested through
+  the shim (cause: the host EVM).
+- O21: the real entry 1 build has no `evm run` row and no gas row. The
+  gate compares the bytes of the shim build and the real build (cause:
+  evm 1.14.12 has no EIP-8141 opcodes, S6).
+- O4: one XMSS tree, measured to h = 16, not XMSS^MT or generalized
+  XMSS for the leanSig lifetime 2^32 (cause: the v1 parameters, Q7).
+- O11: the RFC 8391 checksum, not the leanSig target-sum encoding
+  (cause: the v1 binding, PLAN 3).
+- O5: one signer for each key. Two signers need EIP-8310 reserved leaf
+  ranges and an affine `split` (cause: Q12 (a), not in v1).
+- O7: `Digest` is a base type of 32 bytes, not `Fin n -> Byte` (cause:
+  the S4 choice, Q-S4-8 (a)).
+- O8: the targets lower the `Nat` builtins to machine words, and the
+  lowering is trusted, as zkml-lang `natDiv` (cause: Q-S4-5 (a)).
+- O9: `REFUSE_AFFINE_PATH` can refuse a path whose end points are equal
+  by definition (cause: the PLAN 4.2 rule; S3 records each case).
+- O10: calldata is about 2.7 KB for each signature. At h = 16 (the
+  shim) standard is 43600.5 gas and the EIP-7623 floor is 109001.2 gas,
+  so tx does not pay the floor (cause: EIP-7623, S6 "### Gas rows").
+- O22: the execution gas is approximately 1.7 times the PLAN 5.1
+  estimate: 96044.8 against about 55k at h = 16, the shim (cause: the
+  measured chain steps, S6).
+- O12: reuse across runs (a restored backup) is outside the checker.
+  The harness refuses only a position that is not larger than
+  DIR/ID.state (cause: PLAN 4.5, S5).
+- O13: the seed entropy comes from the host. The keystore JSON has the
+  test seeds in clear and no `crypto` block (cause: the host, S5).
+- O14: an ASCII alias parses and gives `W_NONCANON` with the Unicode
+  form as `fix`; `fmt` prints only the Unicode form (cause: a Claude
+  reading, not ruled; the S9 token baseline measures the cost).
+- O19: the value printer and some check messages use the ASCII kit
+  spelling. The parser reads it back through the aliases (cause: the
+  kit printer, S1).
+- O28: the Z arena (1 GiB for a run) holds about 5 to 9 Poseidon2
+  hashes, so the zkml output has a Z check only. The 6 Z known-answer
+  evals use 569 to 871 MiB max RSS (cause: the Z arena; a fix needs a Z
+  change, Q-S7-1 (a)).
+- O29: only the service mode of the harness checks the program before
+  a signature. The module export `sign` stays callable by another host
+  (cause: Q-S8-1 (a)).
+- O30: the manifest records the langc commit, not the C compiler or its
+  version, and a dirty tree gives dirty true (cause: Q-S8-3 (a), Q-S8-5
+  (a), Q-S8-7).
+- O31: the manifest is not signed. It does not identify the person or
+  the machine that made it (cause: the S8 scope).
+- O32: the leaf in a signing request is an index, not a `Leaf` value.
+  The one-time rule for it is the S5 state (cause: a keystore comes only
+  from `keygen` with the seeds, S8 D4d).
+- `REFUSE_CELL` has no JSON fixture: a program `data` gets `REFUSE_DATA`
+  first. The fronttool domain rows test the code (cause: PLAN 2.1, S2).
+- The bisimulation is not built, and the corecursor names are not ruled
+  (`D.corec` is private) (cause: a dependent `elim` over `D.pos` is a
+  new rule, R7 (c); Q-S2-U6c2-1 (a), S2).
+- A family with type parameters has at most one recursive field in each
+  constructor, and lower.c lowers only a spine (cause: O-U6b-1 (a),
+  `REFUSE_RUNTIME_TREE`, S3).
+- The codata destructors bind the stream at omega, so a 1-stream cannot
+  be observed (cause: O-U6-4, S3).
+- `core_free` assumes that no Op binds a variable. This is not checked
+  against each Op (cause: O-U5-2, S3).
+- `transp` over a constant line refuses one use of a 1-variable (cause:
+  the PLAN 4.2 rule as written, O-U5-3, S3).
+- Of the `path_rule` forms, only `transp` has a test (cause: O-U5-4,
+  S3).
+- `verify` has no explicit index bound; the root compare refuses an
+  index past 2^h - 1 (cause: RFC 8391 Algorithm 14, O-U6-1, S4).
+- L1 is checked at h = 4 only (cause: about 16,080 `thChain` calls for
+  a key in `langc eval`, S4).
+- The definitions fix n = 32 and logW = 4 (cause: Q-S4-8 (a), S4).
+- `check --json` gives "laws" as "0 of 0" (cause: main.c, S4).
+- Mutant M6 survives: no gate row gives `verify` a public key of
+  another height (cause: Q-S5-40 (a), S5).
+- The signer loops are a hand port of the S4 algorithms, and at h = 10
+  only the module runs, with no eval compare (cause: the trusted base,
+  Q-S5-11 (a), S5).
+- `make check` does not run `make gas`. At H = 16 the gas run takes
+  about 17 minutes and 62 MB (cause: Q-S6-8 (b), S6).
 
 ## Internal boundaries
 
-> Write here: one paragraph for each module group. Say which module holds
-> which job, which tests check which tables, and which types a program
-> cannot use.
+src/front holds the front end: the lexer, the parser and `fmt` (S1),
+the checker src/front/check.c (the S1 to S3 refusals and the affine
+layer), the evaluator src/front/eval.c (S4), the lowering
+src/front/lower.c (a spine only, S3) and the reference hashes of `langc
+eval` (Keccak, S4; src/front/poseidon2.c, S7). The parse, check, eval,
+fmt and json rows of test/gate.sh and build/fronttool test it. A
+program cannot use `Either` (O16), a `record` form (S2-Q3 (b)) or the
+private `D.corec` (S2), and it cannot build a sealed `Leaf` or
+`Keystore` (S3).
+
+src/wasm.c writes the Wasm signer module: Keccak in the module and the
+`commit` import (S5). The wasm rows (19 modules valid), the signer rows
+(2 modules valid, 95 rows) and the h = 4 differential against `langc
+eval` test it (S5, S6).
+
+src/evm.c writes the EVM verifier of `langc verifier`: the shim, entry 1
+and entry 2, with the EIP-8141 opcodes in one table (S6). The `evm run`
+rows, the verifier ABI regressions (9 passed), the byte compare of the
+shim build and the real build, and test/gas.sh (`make gas`) test it
+(S6).
+
+src/zkml.c writes the zkml-lang program of `langc zkml` (S7). The zkml
+row (zkml-lang accepts the L7 entry at N = 1), the 6 Z known-answer
+evals and the zkml writer regressions of build/zkml-review (7 passed)
+test it (S7, S8).
+
+src/manifest.c holds the output manifests `OUT.manifest.json` of each
+writer (S8). The manifests rows (23), the rebuilds rows (9, keyed on
+the dirty flag) and the rebuild regressions of test/rebuild-review.c (8
+passed, a clean version fixture) test it (S8, S8 D7).
+
+src/mcp.c holds `langc mcp`, the MCP stdio server with the same steps
+as MCP tools (S9). build/mcp-review (32 rows: 17 fixed, 15 examples)
+tests it. `langc explain` is in src/main.c (S9).
+
+test/ holds the gate. `make check` builds check-clang first, then runs
+test/gate.sh, build/mcp-review, test/review.sh, build/fronttool,
+build/zkml-review and build/rebuild-review. test/run-wasm.mjs is the
+Wasm harness and its service mode (S5, S8). test/gas.sh is `make gas`,
+which `make check` does not run (Q-S6-8 (b)). The tests are in C or in
+the guest language (test/eval/laws.lang, test/ir/hashkat.lang).
+
+## Mutant summary
+
+| Slice | Files | Mutants | Killed | EQUIVALENT | Survivors | Note |
+|---|---|---|---|---|---|---|
+| S2 | src/front/check.c, domain/domain.lang | 6 | 6 | 0 | 0 | C1, C1w, C2, C3, U6c2b, U7-M1 |
+| S3 | src/front/check.c | 14 | 14 | 0 | 0 | the five S3 refusals and the two `Durable` branches |
+| S4 | src/front/eval.c, domain/domain.lang | 10 | 10 | 0 | 0 | M1 to M9 |
+| S5 | src/wasm.c | 11 | 10 | 0 | 1 | M6 (height) survives, Q-S5-40 (a) |
+| S6 | src/evm.c | 8 | 8 | 0 | 0 | |
+| S7 | zkml/xmss.lang, src/zkml.c, src/front/poseidon2.c, src/main.c | 12 | 12 | 0 | 0 | 2 kills by a data word check out of `make check` |
+| S8 | test/run-wasm.mjs, src/main.c, src/manifest.c | 19 | 16 | 3 | 0 | EQUIVALENT: the service mutants S8 and S10, the ws check |
+| S9 | src/mcp.c, src/main.c, test/tokcount.c | 13 | 13 | 0 | 0 | T4 after the token ratio row |
+| Total | | 93 | 89 | 3 | 1 | |
+
+S1 has no "### Mutants" section, so the table has no S1 row (the S1 row
+of PLAN section 9 names the mutants M1 to M6).
 
 ## S1: canonical surface, `langc fmt`, JSON diagnostics
 
@@ -585,23 +763,22 @@ with the 5 table parts in the shim form. In the real entry 1, the
 signature is in the transaction signatures list, not in calldata. Its
 calldata gas is a draft only (O1).
 
-Each cell is min/mean/max over the 16 positions. This table records the
-original S6 measurements before the staged review added calldata bounds
-checks. Review reruns at H = 4 and H = 10 add 160 gas to entry 2 execution
-and tx at every position, so entry 2 is now the shim + 288 gas at those
-heights. Bytes, calldata gas and shim results are unchanged. The H = 16
-keygen has not been rerun after the bounds fix.
+Each cell is min/mean/max over the 16 positions. The rows are the S10
+U1 measurements (`make gas` at H = 4, 10 and 16) after the bounds
+checks of the staged S6 review. The shim rows are equal to the
+original S6 rows. Entry 2 execution and tx are 160 gas more than in
+the original S6 rows at each H, also at H = 16 (Q-S10-6 (a)).
 
 | H | Build | Bytes | Execution | Standard | Floor | Tx |
 |---|---|---|---|---|---|---|
 | 4 | shim | 2376 | 80823/90970.5/101118 | 37368/37440/37500 | 93420/93600/93750 | 139263/149410.5/159582 |
-| 4 | entry 2 | 2852 | 80951/91098.5/101246 | 39452/39524/39584 | 98630/98810/98960 | 141475/151622.5/161794 |
+| 4 | entry 2 | 2852 | 81111/91258.5/101406 | 39452/39524/39584 | 98630/98810/98960 | 141635/151782.5/161954 |
 | 10 | shim | 2568 | 85897/95237.3/106192 | 40452/40533.8/40596 | 101130/101334.4/101490 | 147373/156771.1/167704 |
-| 10 | entry 2 | 3044 | 86025/95365.3/106320 | 42536/42617.8/42680 | 106340/106544.4/106700 | 149585/158983.1/169916 |
+| 10 | entry 2 | 3044 | 86185/95525.3/106480 | 42536/42617.8/42680 | 106340/106544.4/106700 | 149745/159143.1/170076 |
 | 16 | shim | 2760 | 87281/96044.8/111266 | 43512/43600.5/43656 | 108780/109001.2/109140 | 151889/160645.2/175778 |
-| 16 | entry 2 | 3236 | 87409/96172.8/111394 | 45596/45684.5/45740 | 113990/114211.2/114350 | 154101/162857.2/177990 |
+| 16 | entry 2 | 3236 | 87569/96332.8/111554 | 45596/45684.5/45740 | 113990/114211.2/114350 | 154261/163017.2/178150 |
 
-In these original rows, entry 2 is the shim + 128 gas (min, mean and max) and 476
+Entry 2 is the shim + 288 gas (min, mean and max) and 476
 bytes more. In each row, standard + execution is more than the floor.
 Because of this, tx = 21000 + standard + execution. The execution mean
 is 90970.5 at H = 4, 95237.3 at H = 10 and 96044.8 at H = 16. Each H has
@@ -881,7 +1058,7 @@ cases run on all trees, and they kill B4 and B5.
 ## S9: agent kit
 
 S9 adds the agent kit of the S9 row of the plan (Q-S9-1 to Q-S9-9
-(a); Q-S9-10 OPEN, (a) in force). An agent finds the routing rule in
+(a); Q-S9-10 RULED (a) by the USER 2026-10-30). An agent finds the routing rule in
 `AGENTS.md`, the loop in `skills/leaf-lang/SKILL.md`, and the same
 steps as MCP tools in `langc mcp`.
 
@@ -965,5 +1142,6 @@ forms. The token ratio row was then added, and it kills T4.
 ### Open items from S9
 
 - Q-S9-10 (the base rows: (a) the kind and the slice only, (b) also
-  the PLAN 3.2 type sketch): OPEN. (a) is in force.
+  the PLAN 3.2 type sketch): RULED (a) by the USER 2026-10-30, through
+  Q-S10-3 (a): the base rows give the kind and the slice only.
 - S9 does not change the open items of S8.

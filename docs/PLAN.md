@@ -1005,7 +1005,7 @@ on the new checks, docs, close (stage, commit message, next prompt).
 | S7 | Poseidon2 binding (field of Q10) in `langc eval` and the zkml writer; `aggregate`; L7 | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 12; check refusals 44; evals 205; poseidon2 evals 7 (the L1 rows at h = 4, L7 at N = 1, the `--hash sha3` USAGE row); zkml 1 checked (zkml-lang accepts the `langc zkml` output of the L7 entry at N = 1); zkml known answers 6 evals (Q-S7-14 (a)); ir 14 lowered; wasm 19 modules valid; differential 951 cases, 0 mismatches; signer 2 modules valid, 95 rows; verifier ABI regressions 9 passed; fmt 116 canonical, 6 non-canonical pairs (round trip and idempotence); json 33 fixtures, diagnostics 49 codes (31 with a fixture, 18 with no fixture); gate 0 failures; review, signer persistence and domain regressions passed; fronttool: the Poseidon2 vectors of Plonky3 (the (ii) instance at seed 1, the (i) instance on 0..15 and on the (ii) input) and the 5.4 sponge digests on 96, 128 and 160 bytes; 12 mutants on zkml/xmss.lang, src/zkml.c, src/front/poseidon2.c and src/main.c, 12 of 12 killed, 2 of them by a data word check out of `make check` (docs/STATUS.md, S7) |
 | S8 | boundary exclusion: the signer service takes programs only; output manifests; rebuild compare | `make check` EXIT 0: examples 10 checked, 0 failed; parse refusals 12; check refusals 44; evals 205; poseidon2 evals 7; zkml 1 checked; service 10 checked (the service mode of test/run-wasm.mjs: the good request and 9 bad requests, Q-S8-1 (a), Q-S8-6 (a)); manifests 23 checked (`OUT.manifest.json` of each writer, Q-S8-2 (a)); rebuilds 9 checked (the `langc rebuild` rows, keyed on the dirty flag, Q-S8-5 (a), Q-S8-7); rebuild regressions 8 passed (test/rebuild-review.c: the clean-tree rows with a clean version fixture, S8 D7); verifier ABI regressions 9 passed; gate 0 failures; review, signer persistence, domain and zkml writer regressions passed (zkml writer 7); 19 mutants on test/run-wasm.mjs, src/main.c and src/manifest.c: 16 killed, 3 EQUIVALENT (the service mutants S8 and S10, the ws check) (docs/STATUS.md, S8) |
 | S9 | agent kit: `SKILL.md`, grammar card, 5 graded examples, `langc mcp`, `langc explain`, `TOKEN-BASELINE.md`, final `AGENTS.md` | `make check` EXIT 0: examples 10 checked, 0 failed; graded 5 checked (Q-S9-4 (a)); parse refusals 12; check refusals 44; evals 205; poseidon2 evals 7; zkml 1 checked; service 10 checked; manifests 23 checked; rebuilds 9 checked; explain: 4 checked (Q-S9-3 (a), Q-S9-9 (a)); mcp: 32 checked (17 fixed, 15 examples) (build/mcp-review, the MCP stdio test, Q-S9-1 (a), Q-S9-2 (a), Q-S9-6 (a)); token baseline: counts match (docs/TOKEN-BASELINE.md, Q-S9-5 (a), Q-S9-8 (a)); token ratio: half up checked; rebuild regressions 8 passed; verifier ABI regressions 9 passed; gate 0 failures; review, signer persistence, domain and zkml writer regressions passed (zkml writer 7); 13 mutants on src/mcp.c, the explain code of src/main.c and test/tokcount.c: 13 killed (T4 after the token ratio row) (docs/STATUS.md, S9) |
-| S10 | close: `docs/STATUS.md`, `docs/VALIDATION.md`, full gate, mutant summary | full gate EXIT 0 |
+| S10 | close: `docs/STATUS.md`, `docs/VALIDATION.md`, full gate, mutant summary | full gate EXIT 0: serial `make -B check` (Q-S10-4 (a)): examples 10 checked, 0 failed; graded 5 checked; parse refusals 12; check refusals 44; evals 205; poseidon2 evals 7; zkml 1 checked; service 10 checked; manifests 23 checked; rebuilds 9 checked; explain: 4 checked; mcp: 32 checked (17 fixed, 15 examples); token baseline: counts match; token ratio: half up checked; rebuild regressions 8 passed; verifier ABI regressions 9 passed; gate 0 failures; review, signer persistence, domain and zkml writer regressions passed (zkml writer 7); N 386 (docs/VALIDATION.md, Q-S10-5 (a)); one `make gas` run (U1) at H = 4, 10 and 16: the S6 shim rows and the S6 entry 2 rows + 160 gas (Q-S10-6 (a)); mutant summary (docs/STATUS.md, Q-S10-1 (a)): 93 mutants, 89 killed, 3 EQUIVALENT, 1 survivor; the open O items stay open (Q-S10-2 (a)); Q-S9-10 (a) (Q-S10-3 (a)) (docs/STATUS.md, docs/VALIDATION.md) |
 
 ## 10. Open items
 
@@ -1641,5 +1641,39 @@ Session 86 U2): the USER ruled each one (a) on 2026-10-30, in the words
 - Q-S9-9 the `laws` field of explain. RULED (a) by the USER
   2026-10-30: `laws` is `["L5"]` when `leaves` is not empty (the
   affine check is the check part of L5), else `[]`.
-- Q-S9-10 the base rows. OPEN (no USER ruling): (a) the kind and the
-  slice only, (b) also the PLAN 3.2 type sketch. (a) is in force.
+- Q-S9-10 the base rows. RULED (a) by the USER 2026-10-30 (through
+  Q-S10-3 (a), S10 Session 100 U1): the kind and the slice only.
+
+S10 questions (Session 99, W/S10-PROGRESS.md, W/S10-design-s99.md).
+Marks (2026-10-30, S10 Session 100 U1): the USER ruled Q-S10-1 to
+Q-S10-5 (a) on 2026-10-30, in the answers to the Session 100 STEP 0
+questions, and Q-S10-6 (a) on 2026-10-31, after the U1 gas stop.
+
+- Q-S10-1 the place of the mutant summary. RULED (a) by the USER
+  2026-10-30: a new section "## Mutant summary" in docs/STATUS.md after
+  "## Internal boundaries": one row for each slice S2 to S9 and a total
+  row.
+- Q-S10-2 the open O items at the close. RULED (a) by the USER
+  2026-10-30: each open O item stays open and section 10 does not
+  change; docs/STATUS.md lists each one in "Remaining M0 work" (an item
+  that M0 needs) or in "Known limits" (all other items).
+- Q-S10-3 Q-S9-10 at the close. RULED (a) by the USER 2026-10-30: the
+  USER rules Q-S9-10 (a) (the base rows give the kind and the slice
+  only), and docs/STATUS.md records the ruling.
+- Q-S10-4 the full gate. RULED (a) by the USER 2026-10-30: a serial
+  `make -B check` (it builds check-clang first) and one `make gas` run
+  at the heights 4, 10 and 16; the gas rows must be equal to the S6 gas
+  rows of docs/STATUS.md; `make check` does not run `make gas` (Q-S6-8
+  (b) holds).
+- Q-S10-5 the counts of docs/VALIDATION.md. RULED (a) by the USER
+  2026-10-30: N is the sum of the numbers in the gate rows that have a
+  number ("N checked", "N passed"); a row with no number is named, not
+  counted; S is the wall time of the serial gate (`date +%s` before and
+  after).
+- Q-S10-6 the U1 gas rows (Session 100 U1). RULED (a) by the USER
+  2026-10-31: the U1 `make gas` rows are the shim rows of S6 and the
+  entry 2 rows of S6 + 160 gas (execution and tx) at H = 4, 10 and 16
+  (the review bounds checks); the gas compare passes. U2 changes the 3
+  entry 2 rows of the STATUS.md "### Gas rows" section to the U1 rows
+  and the H = 16 sentence to the U1 fact; docs/VALIDATION.md cites the
+  U1 rows.
